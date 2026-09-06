@@ -1,0 +1,77 @@
+# Python virtual environments
+.venv/
+venv/
+myenv/
+env/
+ENV/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+.aws-sam/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.local.example
+*.pem
+*.key
+secrets.json
+
+# AWS and SAM local files
+samconfig.toml
+.aws/
+template-packaged.yaml
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Test and temporary files
+tmp/
+temp/
+.cache/
+
+# Frontend local configuration
+frontend/js/config.local.js
+
+# Athena output downloaded locally
+athena-results/
+
+# Local DynamoDB data
+.dynamodb/
+
+# Node modules (if using npm)
+node_modules/
+package-lock.json
+
+# Local test runtime
+.env
+.venv/
+__pycache__/
+*.pyc
