@@ -1,0 +1,663 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: MoodJournal - AI-powered personal journal with sentiment trends
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment name
+
+  GeminiApiKey:
+    Type: String
+    NoEcho: true
+    Description: Google Gemini API key used for mood classification
+
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: Secret used to sign session tokens. Use a long random string.
+
+  CorsAllowedOrigin:
+    Type: String
+    Default: "*"
+    Description: Origin allowed to call the API. Set to the CloudFront URL after first deploy.
+
+  LogLevel:
+    Type: String
+    Default: INFO
+    AllowedValues: [DEBUG, INFO, WARNING, ERROR]
+
+Globals:
+  Function:
+    Runtime: python3.14
+    Architectures: [x86_64]
+    Timeout: 30
+    MemorySize: 512
+    CodeUri: ../backend/
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: !Ref LogLevel
+      SystemLogLevel: WARN
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        DYNAMODB_TABLE_NAME: !Ref MoodJournalTable
+        USERS_TABLE_NAME: !Ref MoodJournalUsers
+        ANALYTICS_BUCKET_NAME: !Ref AnalyticsBucket
+        ATHENA_DATABASE: !Ref AthenaDatabase
+        ATHENA_OUTPUT_LOCATION: !Sub "s3://${AnalyticsBucket}/athena-results/"
+        ATHENA_WORKGROUP: !Ref AthenaWorkGroup
+        GEMINI_API_KEY: !Ref GeminiApiKey
+        JWT_SECRET: !Ref JwtSecret
+        LOG_LEVEL: !Ref LogLevel
+        CORS_ALLOWED_ORIGIN: !Ref CorsAllowedOrigin
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # Data stores
+  # ---------------------------------------------------------------------------
+
+  # Journal entries and reflections, single-table design.
+  #   PK = USER#{userId}
+  #   SK = ENTRY#{entryDate}#{entryId} | REFLECTION#{createdAt}#{reflectionId}
+  MoodJournalTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "MoodJournalTable-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: MoodJournal
+
+  # User accounts. UsernameIndex exists so login is a Query, never a Scan.
+  MoodJournalUsers:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "MoodJournalUsers-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: username
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: UsernameIndex
+          KeySchema:
+            - AttributeName: username
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: MoodJournal
+
+  # ---------------------------------------------------------------------------
+  # Storage
+  # ---------------------------------------------------------------------------
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "moodjournal-frontend-${Environment}-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub "${FrontendBucket.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}"
+
+  AnalyticsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "moodjournal-analytics-${Environment}-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireAthenaResults
+            Status: Enabled
+            Prefix: athena-results/
+            ExpirationInDays: 7
+
+  # ---------------------------------------------------------------------------
+  # CDN
+  # ---------------------------------------------------------------------------
+  CloudFrontOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "moodjournal-oac-${Environment}"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub "MoodJournal frontend (${Environment})"
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100
+        Origins:
+          - Id: FrontendS3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt CloudFrontOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: FrontendS3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          # AWS managed policy: CachingOptimized
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+  # ---------------------------------------------------------------------------
+  # API
+  # ---------------------------------------------------------------------------
+  MoodJournalApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "moodjournal-api-${Environment}"
+      StageName: !Ref Environment
+      # These become API Gateway mapping expressions, so each value has to be a
+      # quoted string *inside* the YAML string. Dropping the inner single quotes
+      # makes every OPTIONS route fail with "Invalid mapping expression".
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: !Sub "'${CorsAllowedOrigin}'"
+      Auth:
+        # Every route requires a valid token unless it opts out with
+        # Authorizer: NONE (health, register, login).
+        DefaultAuthorizer: JwtAuthorizer
+        Authorizers:
+          JwtAuthorizer:
+            FunctionArn: !GetAtt JwtAuthorizerFunction.Arn
+            Identity:
+              Headers:
+                - Authorization
+              ReauthorizeEvery: 300
+        AddDefaultAuthorizerToCorsPreflight: false
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingBurstLimit: 20
+          ThrottlingRateLimit: 10
+
+  # ---------------------------------------------------------------------------
+  # Authentication
+  # ---------------------------------------------------------------------------
+  JwtAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-jwt-authorizer-${Environment}"
+      Handler: handlers.jwt_authorizer.lambda_handler
+      MemorySize: 256
+      Timeout: 10
+
+  RegisterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-register-${Environment}"
+      Handler: handlers.register.lambda_handler
+      # scrypt hashing is deliberately memory-hard, so this needs headroom.
+      MemorySize: 1024
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MoodJournalUsers
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /auth/register
+            Method: post
+            Auth:
+              Authorizer: NONE
+
+  LoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-login-${Environment}"
+      Handler: handlers.login.lambda_handler
+      MemorySize: 1024
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MoodJournalUsers
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /auth/login
+            Method: post
+            Auth:
+              Authorizer: NONE
+
+  GetMeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-get-me-${Environment}"
+      Handler: handlers.get_me.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MoodJournalUsers
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /auth/me
+            Method: get
+
+  ChangePasswordFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-change-password-${Environment}"
+      Handler: handlers.change_password.lambda_handler
+      MemorySize: 1024
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MoodJournalUsers
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /auth/change-password
+            Method: post
+
+  # ---------------------------------------------------------------------------
+  # Journal entries
+  # ---------------------------------------------------------------------------
+  CreateEntryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-create-entry-${Environment}"
+      Handler: handlers.create_entry.lambda_handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MoodJournalTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /entries
+            Method: post
+
+  ListEntriesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-list-entries-${Environment}"
+      Handler: handlers.list_entries.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MoodJournalTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /entries
+            Method: get
+
+  GetEntryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-get-entry-${Environment}"
+      Handler: handlers.get_entry.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MoodJournalTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /entries/{entryId}
+            Method: get
+
+  UpdateEntryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-update-entry-${Environment}"
+      Handler: handlers.update_entry.lambda_handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MoodJournalTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /entries/{entryId}
+            Method: put
+
+  DeleteEntryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-delete-entry-${Environment}"
+      Handler: handlers.delete_entry.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MoodJournalTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /entries/{entryId}
+            Method: delete
+
+  # ---------------------------------------------------------------------------
+  # Dashboard and reflections
+  # ---------------------------------------------------------------------------
+  GetDashboardFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-get-dashboard-${Environment}"
+      Handler: handlers.get_dashboard.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MoodJournalTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /dashboard
+            Method: get
+
+  CreateReflectionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-create-reflection-${Environment}"
+      Handler: handlers.create_reflection.lambda_handler
+      Timeout: 90
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MoodJournalTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /reflections
+            Method: post
+
+  ListReflectionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-list-reflections-${Environment}"
+      Handler: handlers.list_reflections.lambda_handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MoodJournalTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /reflections
+            Method: get
+
+  # Runs weekly so reflections appear without any console interaction.
+  ScheduledReflectionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-scheduled-reflection-${Environment}"
+      Handler: handlers.scheduled_reflection.lambda_handler
+      Timeout: 300
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MoodJournalTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref MoodJournalUsers
+      Events:
+        WeeklySchedule:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(7 days)
+            Description: Generate a weekly AI reflection for every user
+
+  # ---------------------------------------------------------------------------
+  # Analytics
+  # ---------------------------------------------------------------------------
+  ExportAnalyticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-export-analytics-${Environment}"
+      Handler: handlers.export_analytics.lambda_handler
+      Timeout: 300
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MoodJournalTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref MoodJournalUsers
+        - S3WritePolicy:
+            BucketName: !Ref AnalyticsBucket
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /analytics/export
+            Method: post
+        DailyExport:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(1 day)
+            Description: Export journal analytics to S3 for Athena
+
+  RunAthenaQueryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-run-athena-query-${Environment}"
+      Handler: handlers.run_athena_query.lambda_handler
+      Timeout: 60
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref AnalyticsBucket
+        - Statement:
+            - Effect: Allow
+              Action:
+                - athena:StartQueryExecution
+                - athena:GetQueryExecution
+                - athena:GetQueryResults
+                - athena:StopQueryExecution
+              Resource: !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${AthenaWorkGroup}"
+            - Effect: Allow
+              Action:
+                - glue:GetDatabase
+                - glue:GetTable
+                - glue:GetTables
+                - glue:GetPartitions
+              Resource:
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${AthenaDatabase}"
+                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${AthenaDatabase}/*"
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /analytics/athena
+            Method: get
+
+  HealthFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "moodjournal-health-${Environment}"
+      Handler: handlers.health.lambda_handler
+      MemorySize: 128
+      Timeout: 10
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref MoodJournalApi
+            Path: /health
+            Method: get
+            Auth:
+              Authorizer: NONE
+
+  # ---------------------------------------------------------------------------
+  # Athena
+  # ---------------------------------------------------------------------------
+  AthenaDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub "moodjournal_${Environment}"
+        Description: MoodJournal analytics database
+
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub "moodjournal-${Environment}"
+      State: ENABLED
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${AnalyticsBucket}/athena-results/"
+
+  AnalyticsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref AthenaDatabase
+      TableInput:
+        Name: journal_entries
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: json
+        PartitionKeys:
+          - Name: year
+            Type: string
+          - Name: month
+            Type: string
+          - Name: day
+            Type: string
+        StorageDescriptor:
+          Location: !Sub "s3://${AnalyticsBucket}/moodjournal/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+          Columns:
+            - Name: entryid
+              Type: string
+            - Name: userid
+              Type: string
+            - Name: entrydate
+              Type: string
+            - Name: mood
+              Type: string
+            - Name: moodscore
+              Type: int
+            - Name: confidence
+              Type: double
+            - Name: contentlength
+              Type: int
+            - Name: classificationfallback
+              Type: boolean
+            - Name: createdat
+              Type: string
+
+Outputs:
+  ApiEndpoint:
+    Description: Base URL of the MoodJournal REST API
+    Value: !Sub "https://${MoodJournalApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+
+  CloudFrontUrl:
+    Description: Public URL of the frontend
+    Value: !Sub "https://${CloudFrontDistribution.DomainName}"
+
+  FrontendBucketName:
+    Description: S3 bucket that hosts the frontend
+    Value: !Ref FrontendBucket
+
+  AnalyticsBucketName:
+    Description: S3 bucket used for analytics export and Athena results
+    Value: !Ref AnalyticsBucket
+
+  JournalTableName:
+    Description: DynamoDB table holding entries and reflections
+    Value: !Ref MoodJournalTable
+
+  UsersTableName:
+    Description: DynamoDB table holding user accounts
+    Value: !Ref MoodJournalUsers
+
+  AthenaDatabaseName:
+    Description: Glue/Athena database name
+    Value: !Ref AthenaDatabase
+
+  AthenaWorkGroupName:
+    Description: Athena workgroup name
+    Value: !Ref AthenaWorkGroup
