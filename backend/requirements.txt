@@ -1,0 +1,8 @@
+# Pure-Python only. Anything with compiled binaries (grpcio, cryptography)
+# has to be built on Linux to run on Lambda, which breaks `sam build` on Windows.
+# Gemini is called over its REST API with urllib, so no SDK is needed.
+#
+# boto3/botocore are provided by the Lambda Python runtime and are deliberately
+# not listed here - bundling them only makes the deployment package larger.
+
+PyJWT>=2.8.0
