@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>History — MoodJournal</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <a href="index.html" class="logo">MoodJournal</a>
+        <nav>
+          <a href="index.html" class="nav-link" data-page="index">Write Entry</a>
+          <a href="history.html" class="nav-link active" data-page="history">History</a>
+          <a href="dashboard.html" class="nav-link" data-page="dashboard">Dashboard</a>
+          <a href="reflection.html" class="nav-link" data-page="reflection">Reflections</a>
+        </nav>
+        <hr class="nav-divider" />
+        <div class="user-section">
+          <div class="user-name" id="userNameDisplay">—</div>
+          <div class="user-email" id="userEmailDisplay">—</div>
+          <button class="btn btn-secondary btn-sm btn-block" style="margin-bottom: 0.5rem" onclick="showChangePasswordModal()">Change Password</button>
+          <button class="btn btn-secondary btn-sm btn-block" onclick="logout()">Sign Out</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="container">
+          <h1>Journal History</h1>
+
+          <div class="card">
+            <div class="card-header">
+              <h3 class="card-title">Filter & Search</h3>
+              <button class="btn btn-sm btn-secondary" onclick="clearFilters()">Clear filters</button>
+            </div>
+            <div class="card-body mb-0">
+              <div class="grid grid-3 compact-grid">
+                <div class="form-group">
+                  <label for="filterSearch">Search</label>
+                  <input id="filterSearch" type="text" maxlength="200" placeholder="Search title or text..." />
+                </div>
+                <div class="form-group">
+                  <label for="filterMood">Mood</label>
+                  <select id="filterMood" onchange="applyFilters()">
+                    <option value="">All moods</option>
+                    <option value="POSITIVE">Positive</option>
+                    <option value="NEUTRAL">Neutral</option>
+                    <option value="ANXIOUS">Anxious</option>
+                    <option value="NEGATIVE">Negative</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="filterPeriod">Period</label>
+                  <select id="filterPeriod" onchange="applyFilters()">
+                    <option value="">All time</option>
+                    <option value="7">Last 7 days</option>
+                    <option value="30">Last 30 days</option>
+                    <option value="90">Last 90 days</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top: 2rem">
+            <div class="flex-between section-heading">
+              <h2>All Entries</h2>
+              <span id="resultInfo" class="text-sm text-muted"></span>
+            </div>
+            <div id="entriesContainer" class="grid gap-md"></div>
+            <div id="loadingSpinner" class="hidden spinner"><div class="loader"></div></div>
+            <div id="paginationControls" class="flex gap-md" style="margin-top: 2rem; justify-content: center"></div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script>
+      const api = new ApiClient();
+      requireAuth();
+
+      let nextToken = null;
+      let visibleEntries = 0;
+      let filters = { mood: null, startDate: null, endDate: null, search: null };
+
+      function getDateRange(periodDays) {
+        const today = new Date();
+        const start = new Date(today);
+        start.setDate(today.getDate() - (periodDays - 1));
+        return {
+          startDate: start.toISOString().split("T")[0],
+          endDate: today.toISOString().split("T")[0],
+        };
+      }
+
+      function readFilters() {
+        const mood = document.getElementById("filterMood").value || null;
+        const periodDays = parseInt(document.getElementById("filterPeriod").value, 10) || null;
+        const search = document.getElementById("filterSearch").value.trim() || null;
+        filters = { mood, startDate: null, endDate: null, search };
+        if (periodDays) Object.assign(filters, getDateRange(periodDays));
+      }
+
+      async function applyFilters() {
+        readFilters();
+        await loadEntries(true);
+      }
+
+      function clearFilters() {
+        document.getElementById("filterSearch").value = "";
+        document.getElementById("filterMood").value = "";
+        document.getElementById("filterPeriod").value = "";
+        applyFilters();
+      }
+
+      function buildEntryCard(entry) {
+        const card = document.createElement("div");
+        card.className = "entry-card";
+        card.innerHTML = `
+          <div class="entry-header">
+            <div>
+              <span class="entry-title">${escapeHtml(entry.title || "Untitled")}</span>
+              <span class="entry-date">${formatDate(entry.entryDate)}</span>
+            </div>
+            ${renderMoodBadge(entry.mood, entry.confidence, entry.classificationFallback)}
+          </div>
+          <div class="entry-content">${escapeHtml(entry.content.substring(0, 350))}${entry.content.length > 350 ? "…" : ""}</div>
+          <div class="entry-meta">
+            <span>${entry.content.length} characters · updated ${getRelativeTime(entry.updatedAt)}</span>
+            <div class="flex gap-sm entry-actions">
+              <button class="btn btn-sm btn-secondary" onclick="viewEntry('${entry.entryId}')">View</button>
+              <button class="btn btn-sm" onclick="editEntry('${entry.entryId}')">Edit</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteEntry('${entry.entryId}')">Delete</button>
+            </div>
+          </div>`;
+        return card;
+      }
+
+      async function loadEntries(reset = true) {
+        const container = document.getElementById("entriesContainer");
+        const spinner = document.getElementById("loadingSpinner");
+        const pagination = document.getElementById("paginationControls");
+
+        if (reset) {
+          nextToken = null;
+          visibleEntries = 0;
+          container.innerHTML = "";
+        }
+        spinner.classList.remove("hidden");
+        pagination.innerHTML = "";
+
+        try {
+          const params = new URLSearchParams({ limit: "20" });
+          if (filters.mood) params.set("mood", filters.mood);
+          if (filters.startDate) params.set("startDate", filters.startDate);
+          if (filters.endDate) params.set("endDate", filters.endDate);
+          if (filters.search) params.set("search", filters.search);
+          if (nextToken) params.set("nextToken", nextToken);
+
+          const data = await api.get(`/entries?${params.toString()}`);
+          spinner.classList.add("hidden");
+
+          if (reset && !data.entries?.length) {
+            container.innerHTML = `<div class="empty-state card"><div class="empty-state-text">No entries match your filters.</div></div>`;
+            document.getElementById("resultInfo").textContent = "0 entries";
+            return;
+          }
+
+          data.entries.forEach((entry) => container.appendChild(buildEntryCard(entry)));
+          visibleEntries += data.entries.length;
+          nextToken = data.nextToken;
+          document.getElementById("resultInfo").textContent = `${visibleEntries} entr${visibleEntries === 1 ? "y" : "ies"} shown`;
+
+          if (nextToken) {
+            pagination.innerHTML = `<button id="loadMoreButton" class="btn btn-primary">Load More</button>`;
+            document.getElementById("loadMoreButton").onclick = () => loadEntries(false);
+          }
+        } catch (err) {
+          spinner.classList.add("hidden");
+          showError(err.message || "Could not load entries.");
+        }
+      }
+
+      async function getEntry(entryId) {
+        const data = await api.get(`/entries/${encodeURIComponent(entryId)}`);
+        return data.entry;
+      }
+
+      async function viewEntry(entryId) {
+        try {
+          const entry = await getEntry(entryId);
+          const localNote = entry.classificationFallback
+            ? `<div class="alert alert-warning text-sm">Mood classification used the local fallback so you can test without a Gemini key.</div>`
+            : "";
+          const modal = createModal(
+            "historyEntryModal",
+            `
+              <div class="modal-header">
+                <div>
+                  <h2>${escapeHtml(entry.title || "Untitled")}</h2>
+                  <div class="text-sm text-muted">${formatDate(entry.entryDate)} · Created ${formatDateTime(entry.createdAt)}</div>
+                </div>
+                <button class="icon-button" onclick="closeModal('historyEntryModal')">×</button>
+              </div>
+              <div style="margin-bottom:1rem">${renderMoodBadge(entry.mood, entry.confidence, entry.classificationFallback)}</div>
+              ${localNote}
+              <div class="entry-full-content">${escapeHtml(entry.content)}</div>
+              ${entry.shortReason ? `<div class="classification-note"><strong>Classification note</strong><br>${escapeHtml(entry.shortReason)}</div>` : ""}
+              <div class="modal-actions">
+                <button id="historyModalEdit" class="btn btn-primary">Edit</button>
+                <button id="historyModalDelete" class="btn btn-danger">Delete</button>
+                <button class="btn btn-secondary" onclick="closeModal('historyEntryModal')">Close</button>
+              </div>`
+          );
+          modal.querySelector("#historyModalEdit").onclick = () => {
+            closeModal("historyEntryModal");
+            openEditModal(entry);
+          };
+          modal.querySelector("#historyModalDelete").onclick = async () => {
+            closeModal("historyEntryModal");
+            await deleteEntry(entry.entryId);
+          };
+        } catch (err) {
+          showError(err.message || "Could not load this entry.");
+        }
+      }
+
+      async function editEntry(entryId) {
+        try {
+          openEditModal(await getEntry(entryId));
+        } catch (err) {
+          showError(err.message || "Could not load this entry.");
+        }
+      }
+
+      function openEditModal(entry) {
+        const modal = createModal(
+          "historyEditModal",
+          `
+            <div class="modal-header">
+              <div><h2>Edit Entry</h2><p class="text-sm text-muted">Updating text will re-analyze the mood.</p></div>
+              <button class="icon-button" onclick="closeModal('historyEditModal')">×</button>
+            </div>
+            <form id="historyEditForm">
+              <div class="form-group"><label class="required">Date</label><input id="historyEditDate" type="date" required /></div>
+              <div class="form-group"><label>Title</label><input id="historyEditTitle" type="text" maxlength="200" /></div>
+              <div class="form-group"><label class="required">Content</label><textarea id="historyEditContent" maxlength="5000" required></textarea></div>
+              <div id="historyEditError" class="alert alert-danger hidden"></div>
+              <div class="modal-actions">
+                <button id="historyEditSubmit" class="btn btn-primary" type="submit">Save Changes</button>
+                <button class="btn btn-secondary" type="button" onclick="closeModal('historyEditModal')">Cancel</button>
+              </div>
+            </form>`
+        );
+        modal.querySelector("#historyEditDate").value = entry.entryDate;
+        modal.querySelector("#historyEditDate").max = new Date().toISOString().split("T")[0];
+        modal.querySelector("#historyEditTitle").value = entry.title || "";
+        modal.querySelector("#historyEditContent").value = entry.content;
+
+        modal.querySelector("#historyEditForm").onsubmit = async (e) => {
+          e.preventDefault();
+          const submit = modal.querySelector("#historyEditSubmit");
+          const errorDiv = modal.querySelector("#historyEditError");
+          setButtonBusy(submit, true, "Saving...");
+          errorDiv.classList.add("hidden");
+          try {
+            await api.put(`/entries/${encodeURIComponent(entry.entryId)}`, {
+              entryDate: modal.querySelector("#historyEditDate").value,
+              title: modal.querySelector("#historyEditTitle").value,
+              content: modal.querySelector("#historyEditContent").value,
+            });
+            closeModal("historyEditModal");
+            showSuccess("Entry updated.");
+            await loadEntries(true);
+          } catch (err) {
+            errorDiv.textContent = err.message || "Could not update entry.";
+            errorDiv.classList.remove("hidden");
+            setButtonBusy(submit, false);
+          }
+        };
+      }
+
+      async function deleteEntry(entryId) {
+        if (!confirm("Delete this journal entry? This cannot be undone.")) return;
+        try {
+          await api.delete(`/entries/${encodeURIComponent(entryId)}`);
+          showSuccess("Entry deleted.");
+          await loadEntries(true);
+        } catch (err) {
+          showError(err.message || "Could not delete entry.");
+        }
+      }
+
+      document.getElementById("filterSearch").addEventListener("input", debounce(applyFilters, 300));
+      populateUserSidebar().catch(() => {});
+      readFilters();
+      loadEntries(true);
+      setActivePage("history");
+    </script>
+  </body>
+</html>

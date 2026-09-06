@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dashboard — MoodJournal</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <a href="index.html" class="logo">MoodJournal</a>
+        <nav>
+          <a href="index.html" class="nav-link" data-page="index">Write Entry</a>
+          <a href="history.html" class="nav-link" data-page="history">History</a>
+          <a href="dashboard.html" class="nav-link active" data-page="dashboard">Dashboard</a>
+          <a href="reflection.html" class="nav-link" data-page="reflection">Reflections</a>
+        </nav>
+        <hr class="nav-divider" />
+        <div class="user-section">
+          <div class="user-name" id="userNameDisplay">—</div>
+          <div class="user-email" id="userEmailDisplay">—</div>
+          <button class="btn btn-secondary btn-sm btn-block" style="margin-bottom: 0.5rem" onclick="showChangePasswordModal()">Change Password</button>
+          <button class="btn btn-secondary btn-sm btn-block" onclick="logout()">Sign Out</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="container">
+          <div class="flex-between page-heading">
+            <div>
+              <h1>Dashboard</h1>
+              <p class="text-muted">See mood patterns across your journal entries.</p>
+            </div>
+            <select id="periodSelect" onchange="loadDashboard()" style="max-width: 170px">
+              <option value="7d">Last 7 days</option>
+              <option value="14d">Last 14 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="90d">Last 90 days</option>
+            </select>
+          </div>
+
+          <div id="loadingSpinner" class="spinner"><div class="loader"></div></div>
+          <div id="dashboardError" class="alert alert-danger hidden"></div>
+
+          <div id="dashboardContent" class="hidden">
+            <div class="grid grid-3" style="margin-bottom: 2rem">
+              <div class="card stat-card">
+                <div class="stat-value" id="totalEntries">0</div>
+                <div class="text-sm text-muted">Entries in period</div>
+              </div>
+              <div class="card stat-card">
+                <div class="stat-value" id="mostCommonMoodDisplay">—</div>
+                <div class="text-sm text-muted">Most common mood</div>
+              </div>
+              <div class="card stat-card">
+                <div class="stat-value" id="averageScoreDisplay">—</div>
+                <div class="text-sm text-muted">Average mood score</div>
+              </div>
+            </div>
+
+            <div id="dashboardEmpty" class="empty-state card hidden" style="margin-bottom:2rem">
+              <div class="empty-state-text">No journal entries fall inside this period yet.</div>
+              <a href="index.html" class="btn btn-primary">Write an Entry</a>
+            </div>
+
+            <div id="dashboardCharts" class="grid grid-2" style="margin-bottom: 2rem">
+              <div class="card">
+                <h3 class="card-title">Mood Distribution</h3>
+                <div id="distributionChart" class="distribution-wrap"></div>
+              </div>
+              <div class="card">
+                <h3 class="card-title">Mood Trend</h3>
+                <div id="trendChart" class="trend-wrap"></div>
+              </div>
+            </div>
+
+            <div id="weeklyCard" class="card">
+              <div class="card-header"><h3 class="card-title">Weekly Summary</h3></div>
+              <div class="card-body mb-0">
+                <div style="overflow-x: auto">
+                  <table class="table">
+                    <thead>
+                      <tr>
+                        <th>Week</th><th>Entries</th><th>Avg Score</th><th>Dominant Mood</th>
+                        <th>Positive</th><th>Neutral</th><th>Anxious</th><th>Negative</th>
+                      </tr>
+                    </thead>
+                    <tbody id="weeklySummaryTable"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="text-sm text-muted" style="margin-top: 1rem">
+              <strong>Note:</strong> Mood scores are used only to visualise journal trends. They are not a measurement of wellbeing.
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script>
+      const api = new ApiClient();
+      requireAuth();
+
+      const MOODS = ["POSITIVE", "NEUTRAL", "ANXIOUS", "NEGATIVE"];
+
+      async function loadDashboard() {
+        const period = document.getElementById("periodSelect").value;
+        const spinner = document.getElementById("loadingSpinner");
+        const content = document.getElementById("dashboardContent");
+        const errorDiv = document.getElementById("dashboardError");
+        spinner.classList.remove("hidden");
+        content.classList.add("hidden");
+        errorDiv.classList.add("hidden");
+
+        try {
+          const { dashboard } = await api.get(`/dashboard?period=${encodeURIComponent(period)}`);
+          document.getElementById("totalEntries").textContent = dashboard.totalEntries;
+          document.getElementById("mostCommonMoodDisplay").innerHTML = dashboard.mostCommonMood
+            ? `<span class="stat-mood-label">${dashboard.mostCommonMood}</span>`
+            : "—";
+          document.getElementById("averageScoreDisplay").textContent =
+            dashboard.averageScore === null ? "—" : Number(dashboard.averageScore).toFixed(2);
+
+          const hasEntries = dashboard.totalEntries > 0;
+          document.getElementById("dashboardEmpty").classList.toggle("hidden", hasEntries);
+          document.getElementById("dashboardCharts").classList.toggle("hidden", !hasEntries);
+          document.getElementById("weeklyCard").classList.toggle("hidden", !hasEntries);
+
+          if (hasEntries) {
+            renderDistributionChart(dashboard.moodDistribution || []);
+            renderTrendChart(dashboard.moodTrend || []);
+            renderWeeklySummary(dashboard.weeklySummary || []);
+          }
+
+          content.classList.remove("hidden");
+        } catch (err) {
+          errorDiv.textContent = err.message || "Could not load dashboard.";
+          errorDiv.classList.remove("hidden");
+        } finally {
+          spinner.classList.add("hidden");
+        }
+      }
+
+      function renderDistributionChart(distribution) {
+        const container = document.getElementById("distributionChart");
+        const data = MOODS.map((mood) => distribution.find((d) => d.mood === mood) || { mood, count: 0, percentage: 0 });
+        const total = data.reduce((sum, item) => sum + item.count, 0);
+        if (!total) {
+          container.innerHTML = `<div class="empty-state">No distribution data.</div>`;
+          return;
+        }
+
+        let cursor = 0;
+        const stops = [];
+        data.forEach((item) => {
+          const start = cursor;
+          cursor += item.percentage;
+          stops.push(`${getMoodColor(item.mood)} ${start}% ${cursor}%`);
+        });
+
+        container.innerHTML = `
+          <div class="donut-chart" style="background: conic-gradient(${stops.join(",")})">
+            <div class="donut-hole"><strong>${total}</strong><span>entries</span></div>
+          </div>
+          <div class="chart-legend">
+            ${data.map((item) => `
+              <div class="legend-row">
+                <span class="legend-dot" style="background:${getMoodColor(item.mood)}"></span>
+                <span>${item.mood}</span>
+                <strong>${item.count}</strong>
+                <span class="text-muted">${Number(item.percentage).toFixed(1)}%</span>
+              </div>`).join("")}
+          </div>`;
+      }
+
+      function renderTrendChart(trend) {
+        const container = document.getElementById("trendChart");
+        if (!trend.length) {
+          container.innerHTML = `<div class="empty-state">No trend data.</div>`;
+          return;
+        }
+
+        const width = 720, height = 280;
+        const left = 58, right = 18, top = 18, bottom = 52;
+        const plotW = width - left - right;
+        const plotH = height - top - bottom;
+        const minY = -1, maxY = 2;
+        const xFor = (i) => left + (trend.length === 1 ? plotW / 2 : (i / (trend.length - 1)) * plotW);
+        const yFor = (value) => top + ((maxY - value) / (maxY - minY)) * plotH;
+        const points = trend.map((d, i) => `${xFor(i)},${yFor(d.averageScore)}`).join(" ");
+        const yLabels = [
+          { v: 2, t: "Positive" }, { v: 1, t: "Neutral" }, { v: 0, t: "Anxious" }, { v: -1, t: "Negative" }
+        ];
+        const labelStep = Math.max(1, Math.ceil(trend.length / 6));
+
+        container.innerHTML = `
+          <svg class="trend-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Mood trend chart">
+            ${yLabels.map(({v,t}) => `
+              <line x1="${left}" y1="${yFor(v)}" x2="${width-right}" y2="${yFor(v)}" class="chart-grid-line" />
+              <text x="${left-10}" y="${yFor(v)+4}" text-anchor="end" class="chart-axis-label">${t}</text>`).join("")}
+            <polyline points="${points}" class="trend-line" />
+            ${trend.map((d,i) => `<circle cx="${xFor(i)}" cy="${yFor(d.averageScore)}" r="5" class="trend-point"><title>${formatDate(d.date)}: ${d.averageScore.toFixed(2)} (${d.entryCount} entries)</title></circle>`).join("")}
+            ${trend.map((d,i) => (i % labelStep === 0 || i === trend.length-1) ? `<text x="${xFor(i)}" y="${height-18}" text-anchor="middle" class="chart-axis-label">${escapeHtml(formatDateShort(d.date))}</text>` : "").join("")}
+          </svg>
+          <div class="text-sm text-muted text-center">Daily average mood score</div>`;
+      }
+
+      function renderWeeklySummary(summary) {
+        const tbody = document.getElementById("weeklySummaryTable");
+        tbody.innerHTML = "";
+        summary.forEach((week) => {
+          const start = new Date(`${week.weekStart}T00:00:00`);
+          const end = new Date(start);
+          end.setDate(start.getDate() + 6);
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td>${formatDateShort(week.weekStart)} — ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</td>
+            <td>${week.entryCount}</td>
+            <td>${Number(week.averageScore).toFixed(2)}</td>
+            <td>${week.dominantMood}</td>
+            <td><span class="badge badge-success">${week.moodCounts.POSITIVE}</span></td>
+            <td>${week.moodCounts.NEUTRAL}</td>
+            <td><span class="badge badge-warning">${week.moodCounts.ANXIOUS}</span></td>
+            <td><span class="badge badge-danger">${week.moodCounts.NEGATIVE}</span></td>`;
+          tbody.appendChild(row);
+        });
+      }
+
+      populateUserSidebar().catch(() => {});
+      loadDashboard();
+      setActivePage("dashboard");
+    </script>
+  </body>
+</html>

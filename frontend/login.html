@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login — MoodJournal</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="auth-container">
+      <div class="auth-box">
+        <div class="auth-header">
+          <h1 class="auth-title">MoodJournal</h1>
+          <p class="auth-subtitle">Your personal AI-powered journal</p>
+        </div>
+
+        <form id="loginForm">
+          <div class="form-group">
+            <label for="username" class="required">Username</label>
+            <input type="text" id="username" name="username" required />
+          </div>
+
+          <div class="form-group">
+            <label for="password" class="required">Password</label>
+            <div class="password-field">
+              <input type="password" id="password" name="password" required />
+              <button type="button" class="password-toggle" aria-label="Show password" onclick="togglePasswordVisibility(this)">
+                <svg class="icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                <svg class="icon-eye-off" style="display:none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a13.16 13.16 0 0 1-3.09 4.24"></path><path d="M6.61 6.61A13.53 13.53 0 0 0 1 12s4 8 11 8a9.26 9.26 0 0 0 5.39-1.61"></path><path d="M2 2l20 20"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path></svg>
+              </button>
+            </div>
+          </div>
+
+          <div id="errorAlert" class="hidden"></div>
+
+          <button type="submit" class="btn btn-primary btn-block btn-lg">Sign In</button>
+        </form>
+
+        <div class="auth-link">
+          Don't have an account? <a href="register.html">Create one</a>
+        </div>
+      </div>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script>
+      const api = new ApiClient();
+
+      // Redirect to index if already authenticated
+      if (api.isAuthenticated()) {
+        window.location.href = "index.html";
+      }
+
+      document.getElementById("loginForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+
+        const username = document.getElementById("username").value;
+        const password = document.getElementById("password").value;
+        const errorAlert = document.getElementById("errorAlert");
+
+        errorAlert.classList.add("hidden");
+
+        try {
+          await login(username, password);
+          window.location.href = "index.html";
+        } catch (err) {
+          console.error("Login failed:", err);
+          errorAlert.className = "alert alert-danger";
+          errorAlert.innerHTML = `
+            <div style="flex: 1">${escapeHtml(
+              err.message || "Login failed. Please try again."
+            )}</div>
+          `;
+          errorAlert.classList.remove("hidden");
+          document.getElementById("password").value = "";
+        }
+      });
+    </script>
+  </body>
+</html>

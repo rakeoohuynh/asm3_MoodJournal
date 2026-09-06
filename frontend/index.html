@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Journal — MoodJournal</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="layout">
+      <aside class="sidebar">
+        <a href="index.html" class="logo">MoodJournal</a>
+        <nav>
+          <a href="index.html" class="nav-link active" data-page="index">Write Entry</a>
+          <a href="history.html" class="nav-link" data-page="history">History</a>
+          <a href="dashboard.html" class="nav-link" data-page="dashboard">Dashboard</a>
+          <a href="reflection.html" class="nav-link" data-page="reflection">Reflections</a>
+        </nav>
+        <hr class="nav-divider" />
+        <div class="user-section">
+          <div class="user-name" id="userNameDisplay">—</div>
+          <div class="user-email" id="userEmailDisplay">—</div>
+          <button class="btn btn-secondary btn-sm btn-block" style="margin-bottom: 0.5rem" onclick="showChangePasswordModal()">Change Password</button>
+          <button class="btn btn-secondary btn-sm btn-block" onclick="logout()">Sign Out</button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div class="container">
+          <div class="local-banner">
+            <strong>Local test mode</strong>
+            <span>Data is stored in RAM and will reset when the backend restarts.</span>
+          </div>
+
+          <h1 id="formTitle">Write a Journal Entry</h1>
+          <div id="editModeNotice" class="alert alert-info hidden">
+            You are editing an existing entry. Saving will re-analyze its mood.
+          </div>
+
+          <div class="card">
+            <form id="entryForm">
+              <div class="grid grid-2 compact-grid">
+                <div class="form-group">
+                  <label for="entryDate" class="required">Date</label>
+                  <input type="date" id="entryDate" name="entryDate" required />
+                </div>
+                <div class="form-group">
+                  <label for="entryTitle">Title (optional)</label>
+                  <input type="text" id="entryTitle" name="entryTitle" maxlength="200" placeholder="Give your entry a title..." />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <div class="flex-between">
+                  <label for="entryContent" class="required">What's on your mind?</label>
+                  <span class="text-sm text-muted"><span id="contentCount">0</span>/5000</span>
+                </div>
+                <textarea id="entryContent" name="entryContent" maxlength="5000" placeholder="Write freely. Your thoughts are private in this local test session." required></textarea>
+              </div>
+
+              <div id="errorAlert" class="hidden"></div>
+              <div id="successAlert" class="hidden"></div>
+
+              <div class="flex gap-md form-actions-wrap">
+                <button id="saveButton" type="submit" class="btn btn-primary btn-lg">Save Entry</button>
+                <button id="cancelEditButton" type="button" class="btn btn-secondary btn-lg hidden" onclick="cancelEdit()">Cancel Edit</button>
+                <button id="clearButton" type="button" class="btn btn-secondary btn-lg" onclick="clearForm()">Clear</button>
+              </div>
+
+              <div id="loadingSpinner" class="hidden inline-spinner" style="margin-top: 1rem">
+                <div class="loader"></div>
+                <span>Analyzing mood...</span>
+              </div>
+            </form>
+          </div>
+
+          <div style="margin-top: 2rem">
+            <div class="flex-between section-heading">
+              <h2>Recent Entries</h2>
+              <a href="history.html" class="text-sm">View all →</a>
+            </div>
+            <div id="recentEntries" class="grid gap-md"></div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script src="js/common.js"></script>
+    <script>
+      const api = new ApiClient();
+      requireAuth();
+      let editingEntryId = null;
+
+      const entryForm = document.getElementById("entryForm");
+      const dateInput = document.getElementById("entryDate");
+      const titleInput = document.getElementById("entryTitle");
+      const contentInput = document.getElementById("entryContent");
+      const saveButton = document.getElementById("saveButton");
+      const cancelEditButton = document.getElementById("cancelEditButton");
+      const clearButton = document.getElementById("clearButton");
+      const today = new Date().toISOString().split("T")[0];
+
+      dateInput.value = today;
+      dateInput.max = today;
+      contentInput.addEventListener("input", () => {
+        document.getElementById("contentCount").textContent = contentInput.value.length;
+      });
+
+      function setFormMode(entry = null) {
+        editingEntryId = entry?.entryId || null;
+        document.getElementById("formTitle").textContent = editingEntryId
+          ? "Edit Journal Entry"
+          : "Write a Journal Entry";
+        document.getElementById("editModeNotice").classList.toggle("hidden", !editingEntryId);
+        cancelEditButton.classList.toggle("hidden", !editingEntryId);
+        saveButton.textContent = editingEntryId ? "Update Entry" : "Save Entry";
+      }
+
+      function clearForm() {
+        entryForm.reset();
+        dateInput.value = today;
+        dateInput.max = today;
+        document.getElementById("contentCount").textContent = "0";
+        document.getElementById("errorAlert").classList.add("hidden");
+        document.getElementById("successAlert").classList.add("hidden");
+        if (!editingEntryId) return;
+        setFormMode(null);
+      }
+
+      function cancelEdit() {
+        setFormMode(null);
+        clearForm();
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+
+      async function editEntry(entryId) {
+        try {
+          const data = await api.get(`/entries/${encodeURIComponent(entryId)}`);
+          const entry = data.entry;
+          setFormMode(entry);
+          dateInput.value = entry.entryDate;
+          titleInput.value = entry.title || "";
+          contentInput.value = entry.content;
+          document.getElementById("contentCount").textContent = entry.content.length;
+          window.scrollTo({ top: 0, behavior: "smooth" });
+          contentInput.focus();
+        } catch (err) {
+          showError(err.message || "Could not load this entry.");
+        }
+      }
+
+      async function viewEntry(entryId) {
+        try {
+          const { entry } = await api.get(`/entries/${encodeURIComponent(entryId)}`);
+          const fallback = entry.classificationFallback
+            ? `<div class="alert alert-warning text-sm">This mood was produced by the local fallback classifier for testing.</div>`
+            : "";
+          const modal = createModal(
+            "entryViewModal",
+            `
+              <div class="modal-header">
+                <div>
+                  <h2>${escapeHtml(entry.title || "Untitled")}</h2>
+                  <div class="text-sm text-muted">${formatDate(entry.entryDate)} · Updated ${formatDateTime(entry.updatedAt)}</div>
+                </div>
+                <button class="icon-button" onclick="closeModal('entryViewModal')">×</button>
+              </div>
+              <div style="margin-bottom: 1rem">${renderMoodBadge(entry.mood, entry.confidence, entry.classificationFallback)}</div>
+              ${fallback}
+              <div class="entry-full-content">${escapeHtml(entry.content)}</div>
+              ${entry.shortReason ? `<div class="text-sm text-muted" style="margin-top:1rem"><strong>Classification note:</strong> ${escapeHtml(entry.shortReason)}</div>` : ""}
+              <div class="modal-actions" style="margin-top:1.5rem">
+                <button class="btn btn-primary" id="viewEditButton">Edit</button>
+                <button class="btn btn-secondary" onclick="closeModal('entryViewModal')">Close</button>
+              </div>
+            `
+          );
+          modal.querySelector("#viewEditButton").onclick = () => {
+            closeModal("entryViewModal");
+            editEntry(entry.entryId);
+          };
+        } catch (err) {
+          showError(err.message || "Could not load this entry.");
+        }
+      }
+
+      async function loadRecentEntries() {
+        const container = document.getElementById("recentEntries");
+        try {
+          const data = await api.get("/entries?limit=3");
+          container.innerHTML = "";
+          if (!data.entries?.length) {
+            container.innerHTML = `<div class="empty-state card"><div class="empty-state-text">No entries yet. Write your first one above.</div></div>`;
+            return;
+          }
+
+          data.entries.forEach((entry) => {
+            const card = document.createElement("div");
+            card.className = "entry-card";
+            card.innerHTML = `
+              <div class="entry-header">
+                <div>
+                  <span class="entry-title">${escapeHtml(entry.title || "Untitled")}</span>
+                  <span class="entry-date">${formatDate(entry.entryDate)}</span>
+                </div>
+                ${renderMoodBadge(entry.mood, entry.confidence, entry.classificationFallback)}
+              </div>
+              <div class="entry-content">${escapeHtml(entry.content.substring(0, 220))}${entry.content.length > 220 ? "…" : ""}</div>
+              <div class="entry-meta">
+                <span>${entry.content.length} characters · ${getRelativeTime(entry.updatedAt)}</span>
+                <div class="flex gap-sm">
+                  <button class="btn btn-sm btn-secondary" onclick="viewEntry('${entry.entryId}')">View</button>
+                  <button class="btn btn-sm" onclick="editEntry('${entry.entryId}')">Edit</button>
+                </div>
+              </div>`;
+            container.appendChild(card);
+          });
+        } catch (err) {
+          container.innerHTML = `<div class="alert alert-danger">${escapeHtml(err.message || "Could not load recent entries.")}</div>`;
+        }
+      }
+
+      entryForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const errorAlert = document.getElementById("errorAlert");
+        const successAlert = document.getElementById("successAlert");
+        const spinner = document.getElementById("loadingSpinner");
+        errorAlert.classList.add("hidden");
+        successAlert.classList.add("hidden");
+        spinner.classList.remove("hidden");
+        setButtonBusy(saveButton, true, editingEntryId ? "Updating..." : "Saving...");
+
+        const payload = {
+          entryDate: dateInput.value,
+          title: titleInput.value,
+          content: contentInput.value,
+        };
+
+        try {
+          const data = editingEntryId
+            ? await api.put(`/entries/${encodeURIComponent(editingEntryId)}`, payload)
+            : await api.post("/entries", payload);
+
+          successAlert.className = "alert alert-success";
+          successAlert.textContent = `${editingEntryId ? "Entry updated" : "Entry saved"} · Mood: ${data.entry.mood}${data.entry.classificationFallback ? " (local fallback)" : ""}`;
+          successAlert.classList.remove("hidden");
+          setFormMode(null);
+          entryForm.reset();
+          dateInput.value = today;
+        dateInput.max = today;
+          document.getElementById("contentCount").textContent = "0";
+          await loadRecentEntries();
+          setTimeout(() => successAlert.classList.add("hidden"), 5000);
+        } catch (err) {
+          errorAlert.className = "alert alert-danger";
+          errorAlert.textContent = err.message || "Could not save entry.";
+          errorAlert.classList.remove("hidden");
+        } finally {
+          spinner.classList.add("hidden");
+          setButtonBusy(saveButton, false);
+          saveButton.textContent = editingEntryId ? "Update Entry" : "Save Entry";
+        }
+      });
+
+      populateUserSidebar().catch(() => {});
+      loadRecentEntries();
+      setActivePage("index");
+    </script>
+  </body>
+</html>
