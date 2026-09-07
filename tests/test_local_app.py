@@ -5,12 +5,18 @@ from datetime import date, timedelta
 
 os.environ["APP_ENV"] = "local"
 os.environ["JWT_SECRET"] = "pytest-local-secret-at-least-32-bytes-long"
-os.environ.pop("GEMINI_API_KEY", None)
 
 from fastapi.testclient import TestClient
 
+from backend import local_app
 from backend.local_app import app
 from repositories.memory_store import reset_memory_store
+
+# Importing local_app runs load_dotenv(), which puts GEMINI_API_KEY back even if
+# it was cleared from os.environ first. Blanking the module attribute afterwards
+# is the only reliable way to keep the suite offline: both classify() and the
+# reflection endpoint read this global at call time.
+local_app.GEMINI_API_KEY = ""
 
 client = TestClient(app)
 
@@ -61,6 +67,27 @@ def test_register_login_me_and_change_password():
     assert old_login.status_code == 401
     new_login = client.post("/auth/login", json={"username": "alice", "password": "NewPassword456"})
     assert new_login.status_code == 200
+
+
+def test_change_password_rejects_wrong_current_password():
+    token = register()["token"]
+    h = auth_headers(token)
+
+    r = client.post(
+        "/auth/change-password",
+        headers=h,
+        json={"currentPassword": "NotMyPassword1", "newPassword": "NewPassword456"},
+    )
+    assert r.status_code == 401
+    assert r.json()["error"]["code"] == "INVALID_CURRENT_PASSWORD"
+
+    # The rejected attempt must not have changed anything.
+    still_valid = client.post("/auth/login", json={"username": "alice", "password": "Password123"})
+    assert still_valid.status_code == 200
+    not_applied = client.post(
+        "/auth/login", json={"username": "alice", "password": "NewPassword456"}
+    )
+    assert not_applied.status_code == 401
 
 
 def test_duplicate_username_is_rejected_case_insensitively():
@@ -140,7 +167,10 @@ def test_reflection_works_without_gemini_key():
     assert r.status_code == 201, r.text
     reflection = r.json()["reflection"]
     assert reflection["generatedBy"] == "local-fallback"
-    assert "local test version" in reflection["summary"].lower()
+    # The offline reflection summarises entry count and average mood score.
+    summary = reflection["summary"].lower()
+    assert "journal entr" in summary
+    assert "mood score" in summary
 
     listing = client.get("/reflections", headers=h)
     assert listing.status_code == 200
