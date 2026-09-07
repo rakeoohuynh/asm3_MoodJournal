@@ -806,22 +806,6 @@ textarea {
   }
 }
 
-/* -------------------------------------------------------------------------
-   Local complete version additions
-   ------------------------------------------------------------------------- */
-.local-banner {
-  display: flex;
-  gap: var(--spacing-md);
-  align-items: center;
-  margin-bottom: var(--spacing-lg);
-  padding: 0.75rem 1rem;
-  border: 1px solid #bfdbfe;
-  background: #eff6ff;
-  color: #1e3a8a;
-  border-radius: var(--radius-md);
-  font-size: 0.875rem;
-}
-
 .page-heading,
 .section-heading {
   margin-bottom: var(--spacing-lg);
@@ -1090,11 +1074,6 @@ textarea {
 
   .reflection-meta {
     align-items: flex-start;
-  }
-
-  .local-banner {
-    align-items: flex-start;
-    flex-direction: column;
   }
 }
 

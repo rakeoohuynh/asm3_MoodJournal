@@ -39,6 +39,7 @@ def build_dashboard(
 
     total = len(entries)
     mood_counts = Counter(e.mood for e in entries)
+    scores = [e.mood_score for e in entries]
 
     distribution = [
         {
@@ -71,6 +72,9 @@ def build_dashboard(
         "periodEnd": end_date,
         "totalEntries": total,
         "mostCommonMood": most_common,
+        # dashboard.html renders this in the "Average Score" tile and shows a
+        # dash when it is null. Omitting it entirely made the tile read NaN.
+        "averageScore": round(sum(scores) / len(scores), 2) if scores else None,
         "entriesInPeriod": total,
         "moodDistribution": distribution,
         "moodTrend": trend,

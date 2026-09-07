@@ -26,7 +26,6 @@ dist/
 .env
 .env.*
 !.env.example
-!.env.local.example
 *.pem
 *.key
 secrets.json
@@ -69,9 +68,3 @@ athena-results/
 # Node modules (if using npm)
 node_modules/
 package-lock.json
-
-# Local test runtime
-.env
-.venv/
-__pycache__/
-*.pyc

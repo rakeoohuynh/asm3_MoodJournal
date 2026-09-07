@@ -27,11 +27,6 @@
 
       <main class="main">
         <div class="container">
-          <div class="local-banner">
-            <strong>Local test mode</strong>
-            <span>Data is stored in RAM and will reset when the backend restarts.</span>
-          </div>
-
           <h1 id="formTitle">Write a Journal Entry</h1>
           <div id="editModeNotice" class="alert alert-info hidden">
             You are editing an existing entry. Saving will re-analyze its mood.
@@ -85,6 +80,7 @@
       </main>
     </div>
 
+    <script src="js/config.js"></script>
     <script src="js/common.js"></script>
     <script>
       const api = new ApiClient();

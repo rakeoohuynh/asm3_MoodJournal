@@ -66,13 +66,17 @@ class JournalRepository:
         mood: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
+        search: str | None = None,
         limit: int = 20,
         start_key: dict[str, Any] | None = None,
     ) -> tuple[list[JournalEntry], dict[str, Any] | None]:
         """List entries newest first, with optional filters.
 
         Date filtering uses the sort key range so DynamoDB does the work.
-        Mood filtering is a FilterExpression, which is applied after the read.
+        Mood and search are FilterExpressions, applied after the read: DynamoDB
+        has no text index, so `search` scans the items the key condition already
+        selected. That is acceptable because the key condition has narrowed it
+        to one user's date range, never the whole table.
         """
         low = f"ENTRY#{start_date}" if start_date else "ENTRY#"
         high = f"ENTRY#{end_date}￿" if end_date else "ENTRY#￿"
@@ -83,8 +87,17 @@ class JournalRepository:
             "ScanIndexForward": False,  # newest first
             "Limit": limit,
         }
+
+        filters = None
         if mood:
-            params["FilterExpression"] = Attr("mood").eq(mood)
+            filters = Attr("mood").eq(mood)
+        if search and search.strip():
+            # searchText is stored lowercased because `contains` is case-sensitive.
+            text_match = Attr("searchText").contains(search.strip().lower())
+            filters = text_match if filters is None else filters & text_match
+        if filters is not None:
+            params["FilterExpression"] = filters
+
         if start_key:
             params["ExclusiveStartKey"] = start_key
 

@@ -47,6 +47,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             mood=mood.upper() if mood else None,
             start_date=start_date,
             end_date=end_date,
+            search=(params.get("search") or "")[:200] or None,
             limit=limit,
             start_key=start_key,
         )

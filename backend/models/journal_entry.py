@@ -58,6 +58,11 @@ class JournalEntry:
     def sk(self) -> str:
         return f"ENTRY#{self.entry_date}#{self.entry_id}"
 
+    @property
+    def search_text(self) -> str:
+        """Title and content folded to lowercase, for case-insensitive search."""
+        return f"{self.title} {self.content}".strip().lower()
+
     def to_item(self) -> dict[str, Any]:
         """Convert to a DynamoDB item.
 
@@ -79,6 +84,11 @@ class JournalEntry:
             "classificationFallback": self.classification_fallback,
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
+            # Lowercased title + content, so the history page's search can use a
+            # case-insensitive `contains` filter. DynamoDB has no text index and
+            # `contains` does not fold case, so the value it compares against
+            # has to be stored already folded.
+            "searchText": self.search_text,
         }
 
     @classmethod

@@ -1,10 +1,16 @@
 /**
- * Shared browser utilities for the local MoodJournal app.
- * Local frontend -> http://127.0.0.1:8000 -> RAM backend.
+ * Shared browser utilities for MoodJournal.
+ *
+ * The API address comes from js/config.js, which must be loaded first and is
+ * rewritten at deploy time. Nothing here hard-codes an address, so the same
+ * file works unchanged against a local backend or API Gateway.
  */
 
-const API_BASE_URL =
-  window.MOODJOURNAL_CONFIG?.API_BASE_URL || "http://127.0.0.1:8000";
+const API_BASE_URL = window.MOODJOURNAL_CONFIG?.API_BASE_URL;
+
+if (!API_BASE_URL) {
+  console.error("MoodJournal: js/config.js is missing or did not set API_BASE_URL.");
+}
 const TOKEN_STORAGE_KEY = "moodjournal_token";
 const TOKEN_EXPIRY_KEY = "moodjournal_token_expiry";
 const USER_STORAGE_KEY = "moodjournal_user";
@@ -37,7 +43,7 @@ class ApiClient {
     } catch (err) {
       throw new ApiError(
         "NETWORK_ERROR",
-        `Cannot reach the local backend at ${API_BASE_URL}. Make sure it is running.`,
+        "Cannot reach the MoodJournal API. Check your connection and try again.",
         0
       );
     }
@@ -164,7 +170,7 @@ async function populateUserSidebar() {
     const name = document.getElementById("userNameDisplay");
     const detail = document.getElementById("userEmailDisplay");
     if (name) name.textContent = user.username;
-    if (detail) detail.textContent = "Local RAM session";
+    if (detail) detail.textContent = "Signed in";
     return user;
   } catch (err) {
     if (err.status === 401 || err.code === "UNAUTHORIZED") logout();
