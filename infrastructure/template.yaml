@@ -28,7 +28,10 @@ Parameters:
   LogLevel:
     Type: String
     Default: INFO
-    AllowedValues: [DEBUG, INFO, WARNING, ERROR]
+    # WARN, not WARNING: this value feeds Lambda's ApplicationLogLevel, which
+    # rejects WARNING. Python's logging accepts WARN as an alias, so the same
+    # value also works for logging_config.setLevel().
+    AllowedValues: [DEBUG, INFO, WARN, ERROR]
 
 Globals:
   Function:
