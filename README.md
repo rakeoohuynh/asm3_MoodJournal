@@ -386,17 +386,17 @@ To remove all AWS resources after testing:
 
 ```bash
 # List CloudFormation stacks
-aws cloudformation list-stacks --region ap-southeast-2
+aws cloudformation list-stacks --region us-east-1
 
 # Delete stack
 aws cloudformation delete-stack \
   --stack-name moodjournal-stack \
-  --region ap-southeast-2
+  --region us-east-1
 
 # Monitor deletion
 aws cloudformation wait stack-delete-complete \
   --stack-name moodjournal-stack \
-  --region ap-southeast-2
+  --region us-east-1
 
 echo "✅ Stack deleted"
 ```
