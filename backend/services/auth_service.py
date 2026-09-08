@@ -89,6 +89,30 @@ def login(username: str, password: str, repo: UserRepository | None = None) -> U
     return user
 
 
+def verify_current_password(
+    user_id: str, current_password: str, repo: UserRepository | None = None
+) -> None:
+    """Raise AuthError unless this is the user's current password.
+
+    Separate from change_password so a caller can reject a wrong password
+    before spending time validating anything else. Hashing is deliberately
+    slow, so this is not something to run twice per request.
+    """
+    repo = repo or UserRepository()
+    user = repo.find_by_id(user_id)
+
+    if user is None or not verify_password(current_password, user.password_hash):
+        raise AuthError("Current password is incorrect.")
+
+
+def set_password(
+    user_id: str, new_password: str, repo: UserRepository | None = None
+) -> None:
+    """Write a new password hash. The caller must already have authenticated."""
+    repo = repo or UserRepository()
+    repo.update_password(user_id, hash_password(new_password), utc_now_iso())
+
+
 def change_password(
     user_id: str,
     current_password: str,
@@ -97,12 +121,8 @@ def change_password(
 ) -> None:
     """Replace a user's password after verifying the current one."""
     repo = repo or UserRepository()
-    user = repo.find_by_id(user_id)
-
-    if user is None or not verify_password(current_password, user.password_hash):
-        raise AuthError("Current password is incorrect.")
-
-    repo.update_password(user_id, hash_password(new_password), utc_now_iso())
+    verify_current_password(user_id, current_password, repo=repo)
+    set_password(user_id, new_password, repo=repo)
 
 
 __all__ = [
@@ -112,5 +132,7 @@ __all__ = [
     "issue_token",
     "login",
     "register",
+    "set_password",
+    "verify_current_password",
     "verify_token",
 ]

@@ -296,6 +296,44 @@ def test_weekly_reflection_skips_users_with_no_entries(wired):
     assert wired["journals"].reflections == []
 
 
+def test_change_password_checks_the_current_one_before_anything_else(wired):
+    """A wrong current password must be reported as such.
+
+    Even when the new password is also invalid: telling someone their new
+    password is too short implies the current one was accepted, which is
+    misleading and hides the real reason the change failed.
+    """
+    user = auth_service.register(USERNAME, PASSWORD, repo=wired["users"])
+
+    # Wrong current password AND a new one that fails validation.
+    response = change_password.lambda_handler(
+        http_event(
+            user_id=user.user_id,
+            body={"currentPassword": "WrongPassword9", "newPassword": "short1"},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 401, "the credential decides the outcome, not the format"
+    assert "current password" in body_of(response)["error"]["message"].lower()
+    # Not UNAUTHORIZED: the frontend signs the user out when it sees that code,
+    # so a mistyped current password would end a perfectly valid session.
+    assert body_of(response)["error"]["code"] == "INVALID_CURRENT_PASSWORD"
+
+    # Correct current password, invalid new one -> now the format matters.
+    response = change_password.lambda_handler(
+        http_event(
+            user_id=user.user_id,
+            body={"currentPassword": PASSWORD, "newPassword": "short1"},
+        ),
+        None,
+    )
+    assert response["statusCode"] == 400
+    assert "8 characters" in body_of(response)["error"]["message"]
+
+    # Neither attempt changed anything.
+    assert auth_service.login(USERNAME, PASSWORD, repo=wired["users"])
+
+
 def test_reflection_with_no_entries_returns_a_clear_message(wired):
     """The user should be told why, not shown a 500."""
     user = auth_service.register(USERNAME, PASSWORD, repo=wired["users"])

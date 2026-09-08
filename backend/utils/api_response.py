@@ -17,6 +17,10 @@ VALIDATION_ERROR = "VALIDATION_ERROR"
 NOT_FOUND = "NOT_FOUND"
 CONFLICT = "CONFLICT"
 UNAUTHORIZED = "UNAUTHORIZED"
+# Deliberately distinct from UNAUTHORIZED. The frontend signs the user out when
+# it sees UNAUTHORIZED, which is right for an expired token but wrong for a
+# mistyped current password - that must not end the session.
+INVALID_CURRENT_PASSWORD = "INVALID_CURRENT_PASSWORD"
 INTERNAL_ERROR = "INTERNAL_ERROR"
 EXTERNAL_API_ERROR = "EXTERNAL_API_ERROR"
 TIMEOUT = "TIMEOUT"
