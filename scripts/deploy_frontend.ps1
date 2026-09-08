@@ -94,7 +94,10 @@ window.MOODJOURNAL_CONFIG = {
 };
 "@
 
-Set-Content -Path $configPath -Value $deployedConfig -Encoding utf8
+# WriteAllText, not Set-Content: Windows PowerShell's -Encoding utf8 always
+# prepends a byte order mark, and a BOM at the top of a .js file is asking for
+# an obscure parsing bug somewhere down the line.
+[System.IO.File]::WriteAllText($configPath, $deployedConfig)
 Write-Host "  API_BASE_URL = $($apiUrl.TrimEnd('/'))"
 
 try {
@@ -127,7 +130,7 @@ try {
 }
 finally {
     if (-not $KeepLocalConfig) {
-        Set-Content -Path $configPath -Value $originalConfig -Encoding utf8 -NoNewline
+        [System.IO.File]::WriteAllText($configPath, $originalConfig)
         Write-Host "`nRestored the local config.js (use -KeepLocalConfig to keep the deployed one)."
     }
 }

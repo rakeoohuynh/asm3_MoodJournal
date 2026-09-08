@@ -241,6 +241,37 @@ Resources:
                 - Authorization
               ReauthorizeEvery: 300
         AddDefaultAuthorizerToCorsPreflight: false
+      # API Gateway answers these itself, before any Lambda runs, so the CORS
+      # headers that api_response adds are absent from them. Without these the
+      # browser reports an opaque network failure instead of a 401, the frontend
+      # never sees the status code, and an expired session looks like the API is
+      # down rather than redirecting to the login page.
+      #
+      # Both use 401 and the UNAUTHORIZED code the frontend already watches for,
+      # so a denied token takes the "please sign in again" path.
+      GatewayResponses:
+        UNAUTHORIZED:
+          StatusCode: 401
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${CorsAllowedOrigin}'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+          ResponseTemplates:
+            application/json: >-
+              {"success": false, "error": {"code": "UNAUTHORIZED",
+              "message": "Authentication is required. Please sign in again."}}
+        ACCESS_DENIED:
+          StatusCode: 401
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: !Sub "'${CorsAllowedOrigin}'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+          ResponseTemplates:
+            application/json: >-
+              {"success": false, "error": {"code": "UNAUTHORIZED",
+              "message": "Your session has expired. Please sign in again."}}
       MethodSettings:
         - ResourcePath: "/*"
           HttpMethod: "*"
