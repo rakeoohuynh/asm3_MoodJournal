@@ -35,20 +35,22 @@ logger = get_logger(__name__)
 MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
-# Gemini answers a demand spike with 503 "try again later". Retrying instantly
-# lands in the same spike, so attempts are spaced out. The budget has to fit
-# inside the 30s Lambda timeout set in template.yaml, with room to spare for
-# the DynamoDB write afterwards:
+# Gemini answers a demand spike with 503 "try again later", so attempts are
+# spaced out rather than fired back to back.
 #
-# A 503 comes back in well under a second, so in practice the retries cost
-# only the waiting; the timeout budget below is the worst case where every
-# attempt hangs instead. It fits inside the 60s timeout that template.yaml
-# gives the entry-writing functions:
+# The timeout matters more than the attempt count. Every attempt spends a unit
+# of the API quota, including one abandoned at the timeout - so a short timeout
+# turns a single slow-but-successful call into several failed ones and empties
+# the daily allowance faster. Under load Gemini regularly takes more than ten
+# seconds, so it is given time to answer instead.
 #
-#     4 attempts x 7s  +  0.5 + 1.5 + 3s of waiting  =  33s worst case
-MAX_ATTEMPTS = 4
-REQUEST_TIMEOUT_SECONDS = 7
-RETRY_BACKOFF_SECONDS = (0.5, 1.5, 3.0)
+# Fewer, more patient attempts, sized to fit inside the 60s timeout that
+# template.yaml gives the entry-writing functions:
+#
+#     3 attempts x 15s  +  1s + 3s of waiting  =  49s worst case
+MAX_ATTEMPTS = 3
+REQUEST_TIMEOUT_SECONDS = 15
+RETRY_BACKOFF_SECONDS = (1.0, 3.0)
 
 # Strips ```json ... ``` fences that the model sometimes adds despite the prompt.
 _FENCE_PATTERN = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
