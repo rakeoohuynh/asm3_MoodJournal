@@ -93,8 +93,27 @@ Rules:
 - Return plain text only, with no Markdown or headings."""
 
 
+# Server-side failures worth retrying: the model is busy or a gateway blipped,
+# and a moment later the same request may well succeed.
+#
+# 429 is deliberately absent. It means the daily quota is spent, which will not
+# change within a request - and every retry consumes another unit of the
+# allowance that has already run out, making the situation worse for the next
+# entry the user writes.
+RETRYABLE_STATUS_CODES = frozenset({500, 502, 503, 504})
+
+
 class GeminiError(Exception):
     """Raised when Gemini cannot be reached or returns nothing usable."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+    @property
+    def is_retryable(self) -> bool:
+        """A transport or parsing failure (no status) is worth another go."""
+        return self.status_code is None or self.status_code in RETRYABLE_STATUS_CODES
 
 
 @dataclass
@@ -105,6 +124,15 @@ class MoodResult:
     confidence: float
     short_reason: str
     fallback: bool = False
+
+
+def _should_retry(exc: Exception) -> bool:
+    """Whether another attempt could plausibly succeed."""
+    if isinstance(exc, GeminiError):
+        return exc.is_retryable
+    # ValueError from response parsing: the model returned something odd, and
+    # asking again often produces a well-formed answer.
+    return True
 
 
 def _pause_before_retry(attempt: int) -> None:
@@ -167,7 +195,7 @@ def _generate(prompt: str, json_output: bool = False) -> str:
     except urllib.error.HTTPError as exc:
         # The error body carries Google's reason; the API key is not in it.
         detail = exc.read().decode("utf-8", errors="replace")[:500]
-        raise GeminiError(f"Gemini HTTP {exc.code}: {detail}") from exc
+        raise GeminiError(f"Gemini HTTP {exc.code}: {detail}", status_code=exc.code) from exc
     except urllib.error.URLError as exc:
         raise GeminiError(f"Could not reach Gemini: {exc.reason}") from exc
     except json.JSONDecodeError as exc:
@@ -235,6 +263,9 @@ def classify_mood(journal_text: str) -> MoodResult:
         except Exception as exc:  # noqa: BLE001 - any failure should retry then fall back
             last_error = exc
             logger.warning("Classification attempt %d failed: %s", attempt, exc)
+            if not _should_retry(exc):
+                logger.warning("Not retryable; giving up after attempt %d", attempt)
+                break
             _pause_before_retry(attempt)
 
     logger.error("Classification failed after %d attempts: %s", MAX_ATTEMPTS, last_error)
@@ -265,6 +296,9 @@ def generate_reflection(period_label: str, summary_data: str) -> str:
         except Exception as exc:  # noqa: BLE001 - any failure should retry then raise
             last_error = exc
             logger.warning("Reflection generation attempt %d failed: %s", attempt, exc)
+            if not _should_retry(exc):
+                logger.warning("Not retryable; giving up after attempt %d", attempt)
+                break
             _pause_before_retry(attempt)
 
     logger.error("Reflection generation failed after %d attempts: %s", MAX_ATTEMPTS, last_error)

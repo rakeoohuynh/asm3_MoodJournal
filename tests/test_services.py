@@ -231,6 +231,58 @@ def test_dashboard_average_is_none_when_empty(journals):
     assert dashboard["mostCommonMood"] is None
 
 
+# ---------------------------------------------------------------------------
+# Gemini retry policy
+# ---------------------------------------------------------------------------
+
+
+def _counting_generate(monkeypatch, error):
+    """Replace the HTTP call and count how many times it is attempted."""
+    from services import gemini_service
+
+    calls = {"n": 0}
+
+    def _fake(prompt, json_output=False):
+        calls["n"] += 1
+        raise error
+
+    monkeypatch.setattr(gemini_service, "_generate", _fake)
+    return calls
+
+
+def test_quota_errors_are_not_retried(monkeypatch):
+    """429 means the daily allowance is spent.
+
+    Retrying cannot succeed and each attempt spends more of an allowance that
+    has already run out, so it must cost exactly one call.
+    """
+    from services import gemini_service
+
+    calls = _counting_generate(
+        monkeypatch, gemini_service.GeminiError("quota exceeded", status_code=429)
+    )
+
+    result = gemini_service.classify_mood("anything")
+
+    assert calls["n"] == 1, "a quota error must not be retried"
+    assert result.fallback is True
+
+
+def test_transient_server_errors_are_retried(monkeypatch):
+    """503 means the model is busy; a moment later it may well answer."""
+    from services import gemini_service
+
+    calls = _counting_generate(
+        monkeypatch, gemini_service.GeminiError("model overloaded", status_code=503)
+    )
+    monkeypatch.setattr(gemini_service, "RETRY_BACKOFF_SECONDS", (0, 0, 0))
+
+    result = gemini_service.classify_mood("anything")
+
+    assert calls["n"] == gemini_service.MAX_ATTEMPTS
+    assert result.fallback is True
+
+
 def test_a_writer_ahead_of_utc_can_record_and_see_todays_entry(journals, fake_gemini):
     """Someone east of Greenwich has a local date a day ahead of UTC.
 
