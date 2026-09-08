@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 # Lambda unpacks the bundle so that "models", "services" etc. are top level.
@@ -26,10 +27,20 @@ os.environ["ENVIRONMENT"] = "test"
 os.environ.pop("GEMINI_API_KEY", None)
 
 import pytest  # noqa: E402
-
 from models.journal_entry import JournalEntry  # noqa: E402
 from models.reflection import Reflection  # noqa: E402
 from models.user import User  # noqa: E402
+
+
+def utc_today() -> date:
+    """Today in UTC, which is the only "today" the application knows.
+
+    Services derive their date ranges from datetime.now(timezone.utc), and
+    entry dates are stored as UTC dates. Using date.today() in a test means the
+    *local* date, so anywhere east of UTC the tests seed entries dated
+    "tomorrow" for part of every day and the ranges silently miss them.
+    """
+    return datetime.now(timezone.utc).date()
 
 
 class StubUserRepository:

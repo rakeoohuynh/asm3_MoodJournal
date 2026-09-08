@@ -8,14 +8,13 @@ codes. Repositories are patched onto each handler module, so no AWS is touched.
 from __future__ import annotations
 
 import json
-from datetime import date
 
 import pytest
-
-from tests.conftest import api_event
 from handlers import get_dashboard, jwt_authorizer, list_entries
 from models.journal_entry import JournalEntry
 from services import auth_service
+
+from tests.conftest import api_event, utc_today
 
 
 def body_of(response: dict) -> dict:
@@ -40,7 +39,7 @@ def test_handler_uses_the_authorizer_user_not_a_query_parameter(journals, monkey
     monkeypatch.setattr(list_entries, "JournalRepository", lambda: journals)
     journals.put_entry(
         JournalEntry(user_id="alice", title="Alice private", content="hers",
-                     entry_date=date.today().isoformat(), mood="POSITIVE")
+                     entry_date=utc_today().isoformat(), mood="POSITIVE")
     )
 
     response = list_entries.lambda_handler(
@@ -57,7 +56,7 @@ def test_handler_uses_the_authorizer_user_not_a_query_parameter(journals, monkey
 
 
 def seed(journals, user_id="user-1"):
-    today = date.today().isoformat()
+    today = utc_today().isoformat()
     for title, content, mood in [
         ("Deadline looming", "Worried about the deadline.", "ANXIOUS"),
         ("Great day", "Felt happy and proud.", "POSITIVE"),

@@ -13,10 +13,9 @@ on AWS too.
 from __future__ import annotations
 
 import json
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pytest
-
 from handlers import (
     change_password,
     create_entry,
@@ -34,7 +33,8 @@ from handlers import (
     update_entry,
 )
 from services import analytics_service, auth_service, journal_service, reflection_service
-from tests.conftest import api_event
+
+from tests.conftest import api_event, utc_today
 
 USERNAME = "e2e.user"
 PASSWORD = "Password123"
@@ -130,7 +130,7 @@ def test_complete_user_journey(wired):
     assert body_of(response)["user"]["username"] == USERNAME
 
     # -- write entries across several days ---------------------------------
-    today = date.today()
+    today = utc_today()
     written = []
     for days_ago, mood, title, content in [
         (4, "POSITIVE", "Good day", "Felt happy and proud today."),
@@ -266,7 +266,7 @@ def test_weekly_reflection_runs_without_anyone_pressing_a_button(wired):
     """EventBridge invokes this directly; no HTTP request is involved."""
     user = auth_service.register(USERNAME, PASSWORD, repo=wired["users"])
 
-    today = date.today()
+    today = utc_today()
     for days_ago in range(4):
         journal_service.create_entry(
             user_id=user.user_id,
@@ -351,7 +351,7 @@ def test_reflection_reports_a_clean_error_when_gemini_fails(wired):
     user = auth_service.register(USERNAME, PASSWORD, repo=wired["users"])
     journal_service.create_entry(
         user_id=user.user_id, title="Today", content="A day.",
-        entry_date=date.today().isoformat(), repo=wired["journals"],
+        entry_date=utc_today().isoformat(), repo=wired["journals"],
     )
     wired["gemini"]["fail"] = True
 

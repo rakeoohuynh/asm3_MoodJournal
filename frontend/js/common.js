@@ -10,6 +10,16 @@ const API_BASE_URL = window.MOODJOURNAL_CONFIG?.API_BASE_URL;
 
 if (!API_BASE_URL) {
   console.error("MoodJournal: js/config.js is missing or did not set API_BASE_URL.");
+} else {
+  // Open the connection to the API now, while the rest of the page is still
+  // parsing, instead of when the first fetch fires. DNS, TCP and the TLS
+  // handshake are otherwise all paid serially before the first byte of data is
+  // requested - and over a long link that is most of a round trip.
+  const preconnect = document.createElement("link");
+  preconnect.rel = "preconnect";
+  preconnect.href = new URL(API_BASE_URL).origin;
+  preconnect.crossOrigin = "";
+  document.head.appendChild(preconnect);
 }
 const TOKEN_STORAGE_KEY = "moodjournal_token";
 const TOKEN_EXPIRY_KEY = "moodjournal_token_expiry";

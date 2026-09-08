@@ -7,16 +7,17 @@ stub repository and Gemini is patched, so no AWS or network access is needed.
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pytest
-
 from models.journal_entry import JournalEntry
 from repositories.user_repository import UsernameTakenError
 from services import analytics_service, auth_service, journal_service, reflection_service
 from services.auth_service import AuthError
 from services.journal_service import EntryNotFoundError
 from services.reflection_service import NoEntriesError
+
+from tests.conftest import utc_today
 
 PASSWORD = "Password123"
 
@@ -105,7 +106,7 @@ def test_change_password_requires_the_current_one(users):
 def test_create_entry_classifies_and_stores(journals, fake_gemini):
     entry = journal_service.create_entry(
         user_id="u1", title="Good day", content="Felt great.",
-        entry_date=date.today().isoformat(), repo=journals,
+        entry_date=utc_today().isoformat(), repo=journals,
     )
 
     assert entry.mood == "POSITIVE"
@@ -119,7 +120,7 @@ def test_gemini_outage_still_saves_the_entry(journals, fake_gemini):
 
     entry = journal_service.create_entry(
         user_id="u1", title="", content="Something happened.",
-        entry_date=date.today().isoformat(), repo=journals,
+        entry_date=utc_today().isoformat(), repo=journals,
     )
 
     assert journals.get_entry("u1", entry.entry_id) is not None
@@ -130,7 +131,7 @@ def test_gemini_outage_still_saves_the_entry(journals, fake_gemini):
 def test_update_entry_reclassifies_and_keeps_created_at(journals, fake_gemini):
     original = journal_service.create_entry(
         user_id="u1", title="First", content="Neutral text.",
-        entry_date=date.today().isoformat(), repo=journals,
+        entry_date=utc_today().isoformat(), repo=journals,
     )
 
     fake_gemini["mood"] = "ANXIOUS"
@@ -149,7 +150,7 @@ def test_update_and_delete_reject_unknown_entries(journals, fake_gemini):
     with pytest.raises(EntryNotFoundError):
         journal_service.update_entry(
             user_id="u1", entry_id="missing", title="x", content="y",
-            entry_date=date.today().isoformat(), repo=journals,
+            entry_date=utc_today().isoformat(), repo=journals,
         )
     with pytest.raises(EntryNotFoundError):
         journal_service.delete_entry("u1", "missing", repo=journals)
@@ -158,7 +159,7 @@ def test_update_and_delete_reject_unknown_entries(journals, fake_gemini):
 def test_delete_entry_removes_it(journals, fake_gemini):
     entry = journal_service.create_entry(
         user_id="u1", title="Temp", content="Delete me.",
-        entry_date=date.today().isoformat(), repo=journals,
+        entry_date=utc_today().isoformat(), repo=journals,
     )
     journal_service.delete_entry("u1", entry.entry_id, repo=journals)
     assert journals.get_entry("u1", entry.entry_id) is None
@@ -167,7 +168,7 @@ def test_delete_entry_removes_it(journals, fake_gemini):
 def test_one_user_cannot_reach_another_users_entry(journals, fake_gemini):
     entry = journal_service.create_entry(
         user_id="alice", title="Private", content="Alice only.",
-        entry_date=date.today().isoformat(), repo=journals,
+        entry_date=utc_today().isoformat(), repo=journals,
     )
 
     assert journals.get_entry("bob", entry.entry_id) is None
@@ -178,7 +179,7 @@ def test_one_user_cannot_reach_another_users_entry(journals, fake_gemini):
 def test_search_text_is_folded_for_case_insensitive_matching():
     entry = JournalEntry(
         user_id="u1", title="Deadline Looming", content="I am STRESSED.",
-        entry_date=date.today().isoformat(),
+        entry_date=utc_today().isoformat(),
     )
     assert "deadline looming" in entry.search_text
     assert "stressed" in entry.search_text
@@ -191,7 +192,7 @@ def test_search_text_is_folded_for_case_insensitive_matching():
 
 
 def seed_entries(journals, moods: list[str], user_id="u1") -> None:
-    today = date.today()
+    today = utc_today()
     for offset, mood in enumerate(moods):
         journals.put_entry(
             JournalEntry(
@@ -231,7 +232,7 @@ def test_dashboard_average_is_none_when_empty(journals):
 
 
 def test_dashboard_only_counts_the_requested_period(journals):
-    today = date.today()
+    today = utc_today()
     journals.put_entry(
         JournalEntry(user_id="u1", title="Old", content="x",
                      entry_date=(today - timedelta(days=40)).isoformat(), mood="NEGATIVE")
@@ -284,7 +285,7 @@ def test_reflection_never_leaks_journal_text_to_gemini(journals, fake_gemini, mo
     journals.put_entry(
         JournalEntry(
             user_id="u1", title="Tuesday", content="A very private confession.",
-            entry_date=date.today().isoformat(), mood="NEUTRAL",
+            entry_date=utc_today().isoformat(), mood="NEUTRAL",
         )
     )
 
