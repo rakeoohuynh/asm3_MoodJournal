@@ -104,17 +104,23 @@ try {
     # --- 3. Upload to S3 --------------------------------------------------
     Write-Host "`n[3/4] Uploading to s3://$bucket ..." -ForegroundColor Cyan
 
-    # HTML and the config get a short cache life so a redeploy is picked up even
-    # before the invalidation lands; static assets can be cached hard.
+    # Assets are cached hard; HTML and the config get a short life rather than
+    # no-cache. "no-cache" would force CloudFront to revalidate with the origin
+    # on every page load, adding a round trip to the stack's region each time -
+    # and it buys nothing, because step 4 invalidates the cache after each
+    # upload, so a redeploy is visible immediately regardless.
     aws s3 sync $frontendDir "s3://$bucket" --region $Region --delete `
         --exclude "*.html" --exclude "js/config.js" `
         --cache-control "public,max-age=86400"
     if ($LASTEXITCODE -ne 0) { throw "s3 sync of static assets failed." }
 
-    aws s3 sync $frontendDir "s3://$bucket" --region $Region `
+    # `cp`, not `sync`: sync skips files whose content is unchanged, so a
+    # cache-control change alone would never be applied to them. cp always
+    # writes, which keeps the headers correct even when only metadata differs.
+    aws s3 cp $frontendDir "s3://$bucket" --region $Region --recursive `
         --exclude "*" --include "*.html" --include "js/config.js" `
-        --cache-control "no-cache"
-    if ($LASTEXITCODE -ne 0) { throw "s3 sync of HTML/config failed." }
+        --cache-control "public,max-age=300"
+    if ($LASTEXITCODE -ne 0) { throw "s3 upload of HTML/config failed." }
 
     # --- 4. Invalidate CloudFront ----------------------------------------
     Write-Host "`n[4/4] Invalidating CloudFront..." -ForegroundColor Cyan
