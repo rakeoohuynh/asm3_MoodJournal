@@ -165,13 +165,24 @@ function requireAuth() {
 }
 
 async function populateUserSidebar() {
-  try {
-    const user = await getMe();
+  const render = (user) => {
     const name = document.getElementById("userNameDisplay");
     const detail = document.getElementById("userEmailDisplay");
     if (name) name.textContent = user.username;
     if (detail) detail.textContent = "Signed in";
     return user;
+  };
+
+  // The username is saved at sign-in, so the sidebar can render with no
+  // network call at all. Fetching it on every page load cost an extra API
+  // round trip - through the authorizer Lambda as well - just to redisplay a
+  // value already held locally. An invalid token is still caught: the page's
+  // own data request returns 401 and clears the session.
+  const cached = getCurrentUser();
+  if (cached && cached.username) return render(cached);
+
+  try {
+    return render(await getMe());
   } catch (err) {
     if (err.status === 401 || err.code === "UNAUTHORIZED") logout();
     throw err;

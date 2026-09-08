@@ -38,7 +38,10 @@ Globals:
     Runtime: python3.14
     Architectures: [x86_64]
     Timeout: 30
-    MemorySize: 512
+    # Lambda scales CPU with memory, so this mostly buys a faster cold start
+    # and a faster response. Billing is GB-seconds, so finishing in half the
+    # time at twice the memory costs about the same.
+    MemorySize: 1024
     CodeUri: ../backend/
     LoggingConfig:
       LogFormat: JSON
