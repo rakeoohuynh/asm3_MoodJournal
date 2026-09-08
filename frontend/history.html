@@ -92,8 +92,8 @@
         const start = new Date(today);
         start.setDate(today.getDate() - (periodDays - 1));
         return {
-          startDate: start.toISOString().split("T")[0],
-          endDate: today.toISOString().split("T")[0],
+          startDate: localDateString(start),
+          endDate: localDateString(today),
         };
       }
 
@@ -257,7 +257,7 @@
             </form>`
         );
         modal.querySelector("#historyEditDate").value = entry.entryDate;
-        modal.querySelector("#historyEditDate").max = new Date().toISOString().split("T")[0];
+        modal.querySelector("#historyEditDate").max = localDateString();
         modal.querySelector("#historyEditTitle").value = entry.title || "";
         modal.querySelector("#historyEditContent").value = entry.content;
 

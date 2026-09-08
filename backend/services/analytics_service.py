@@ -23,10 +23,16 @@ EXPORT_PREFIX = "moodjournal"
 
 
 def date_range(days: int) -> tuple[str, str]:
-    """Inclusive start and end dates covering the last `days` days."""
+    """Inclusive start and end dates covering the last `days` days.
+
+    The end is UTC tomorrow, not UTC today. Entries carry the writer's local
+    date, which is a day ahead of UTC for part of every day east of Greenwich,
+    so stopping at UTC today would hide an entry the user just wrote from their
+    own dashboard until UTC caught up.
+    """
     today = datetime.now(timezone.utc).date()
     start = today - timedelta(days=days - 1)
-    return start.isoformat(), today.isoformat()
+    return start.isoformat(), (today + timedelta(days=1)).isoformat()
 
 
 def build_dashboard(

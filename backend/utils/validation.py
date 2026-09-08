@@ -5,7 +5,7 @@ Each function returns the cleaned value or raises ValidationError.
 """
 
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 MIN_CONTENT_LENGTH = 1
 MAX_CONTENT_LENGTH = 5000
@@ -56,7 +56,14 @@ def validate_title(value: object) -> str:
 
 
 def validate_entry_date(value: object) -> str:
-    """Entry date as YYYY-MM-DD. Defaults to today (UTC) when absent."""
+    """Entry date as YYYY-MM-DD. Defaults to today (UTC) when absent.
+
+    The browser sends the writer's local date, which can be a day ahead of UTC
+    for anyone east of Greenwich - it is already the 9th in Sydney while UTC is
+    still the 8th. Rejecting that as "in the future" would stop those users
+    recording today's entry for the first hours of every day, so the ceiling is
+    UTC tomorrow. Timezones reach UTC+14, which is still inside one day.
+    """
     if value is None or value == "":
         return datetime.now(timezone.utc).date().isoformat()
     if not isinstance(value, str):
@@ -67,7 +74,7 @@ def validate_entry_date(value: object) -> str:
         raise ValidationError("Entry date must be in YYYY-MM-DD format.") from exc
     if parsed.year < 2000 or parsed.year > 2100:
         raise ValidationError("Entry date is outside the supported range.")
-    if parsed > datetime.now(timezone.utc).date():
+    if parsed > datetime.now(timezone.utc).date() + timedelta(days=1):
         raise ValidationError("Entry date cannot be in the future.")
     return parsed.isoformat()
 

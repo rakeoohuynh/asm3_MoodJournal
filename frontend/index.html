@@ -95,7 +95,7 @@
       const saveButton = document.getElementById("saveButton");
       const cancelEditButton = document.getElementById("cancelEditButton");
       const clearButton = document.getElementById("clearButton");
-      const today = new Date().toISOString().split("T")[0];
+      const today = localDateString();
 
       dateInput.value = today;
       dateInput.max = today;

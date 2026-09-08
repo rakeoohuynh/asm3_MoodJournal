@@ -240,6 +240,14 @@ function escapeHtml(value) {
   return text.replace(/[&<>"']/g, (m) => map[m]);
 }
 
+// The date the writer is living in, not the date in UTC. toISOString() converts
+// to UTC first, so east of Greenwich it returns yesterday for the early hours
+// of every day - and a journal's "today" is the writer's today.
+function localDateString(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return "—";
   const date = new Date(`${dateStr}T00:00:00`);

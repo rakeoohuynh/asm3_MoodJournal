@@ -231,6 +231,33 @@ def test_dashboard_average_is_none_when_empty(journals):
     assert dashboard["mostCommonMood"] is None
 
 
+def test_a_writer_ahead_of_utc_can_record_and_see_todays_entry(journals, fake_gemini):
+    """Someone east of Greenwich has a local date a day ahead of UTC.
+
+    Their "today" must be accepted rather than rejected as a future date, and
+    it must appear on their own dashboard immediately - not once UTC catches up
+    some hours later.
+    """
+    local_today = (utc_today() + timedelta(days=1)).isoformat()
+
+    entry = journal_service.create_entry(
+        user_id="u1", title="After midnight", content="Still today where I am.",
+        entry_date=local_today, repo=journals,
+    )
+    assert entry.entry_date == local_today
+
+    dashboard = analytics_service.build_dashboard("u1", 7, repo=journals)
+    assert dashboard["totalEntries"] == 1, "the entry must not be hidden until UTC rolls over"
+
+
+def test_a_genuinely_future_date_is_still_refused(journals):
+    """One day of slack for timezones; two days is someone inventing the future."""
+    from utils.validation import ValidationError, validate_entry_date
+
+    with pytest.raises(ValidationError):
+        validate_entry_date((utc_today() + timedelta(days=2)).isoformat())
+
+
 def test_dashboard_only_counts_the_requested_period(journals):
     today = utc_today()
     journals.put_entry(

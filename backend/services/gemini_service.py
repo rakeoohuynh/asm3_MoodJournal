@@ -18,6 +18,7 @@ Two rules shape this module:
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -33,9 +34,21 @@ logger = get_logger(__name__)
 # to the NEUTRAL fallback. Override with GEMINI_MODEL if a specific one is needed.
 MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-MAX_ATTEMPTS = 2
-# Well under the 60s Lambda timeout, leaving room for a second attempt.
-REQUEST_TIMEOUT_SECONDS = 20
+
+# Gemini answers a demand spike with 503 "try again later". Retrying instantly
+# lands in the same spike, so attempts are spaced out. The budget has to fit
+# inside the 30s Lambda timeout set in template.yaml, with room to spare for
+# the DynamoDB write afterwards:
+#
+# A 503 comes back in well under a second, so in practice the retries cost
+# only the waiting; the timeout budget below is the worst case where every
+# attempt hangs instead. It fits inside the 60s timeout that template.yaml
+# gives the entry-writing functions:
+#
+#     4 attempts x 7s  +  0.5 + 1.5 + 3s of waiting  =  33s worst case
+MAX_ATTEMPTS = 4
+REQUEST_TIMEOUT_SECONDS = 7
+RETRY_BACKOFF_SECONDS = (0.5, 1.5, 3.0)
 
 # Strips ```json ... ``` fences that the model sometimes adds despite the prompt.
 _FENCE_PATTERN = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
@@ -92,6 +105,16 @@ class MoodResult:
     confidence: float
     short_reason: str
     fallback: bool = False
+
+
+def _pause_before_retry(attempt: int) -> None:
+    """Wait between attempts, so a retry does not land in the same spike.
+
+    `attempt` is 1-based and counts the attempt that just failed; nothing is
+    slept after the final one.
+    """
+    if attempt <= len(RETRY_BACKOFF_SECONDS):
+        time.sleep(RETRY_BACKOFF_SECONDS[attempt - 1])
 
 
 def _get_api_key() -> str:
@@ -212,6 +235,7 @@ def classify_mood(journal_text: str) -> MoodResult:
         except Exception as exc:  # noqa: BLE001 - any failure should retry then fall back
             last_error = exc
             logger.warning("Classification attempt %d failed: %s", attempt, exc)
+            _pause_before_retry(attempt)
 
     logger.error("Classification failed after %d attempts: %s", MAX_ATTEMPTS, last_error)
     return MoodResult(
@@ -241,6 +265,7 @@ def generate_reflection(period_label: str, summary_data: str) -> str:
         except Exception as exc:  # noqa: BLE001 - any failure should retry then raise
             last_error = exc
             logger.warning("Reflection generation attempt %d failed: %s", attempt, exc)
+            _pause_before_retry(attempt)
 
     logger.error("Reflection generation failed after %d attempts: %s", MAX_ATTEMPTS, last_error)
     if isinstance(last_error, GeminiError):

@@ -378,6 +378,8 @@ Resources:
     Properties:
       FunctionName: !Sub "moodjournal-create-entry-${Environment}"
       Handler: handlers.create_entry.lambda_handler
+      # Calls Gemini, which retries a busy model with backoff. The global 30s
+      # would cut that short; see MAX_ATTEMPTS in services/gemini_service.py.
       Timeout: 60
       Policies:
         - DynamoDBCrudPolicy:
@@ -427,6 +429,8 @@ Resources:
     Properties:
       FunctionName: !Sub "moodjournal-update-entry-${Environment}"
       Handler: handlers.update_entry.lambda_handler
+      # Calls Gemini, which retries a busy model with backoff. The global 30s
+      # would cut that short; see MAX_ATTEMPTS in services/gemini_service.py.
       Timeout: 60
       Policies:
         - DynamoDBCrudPolicy:
@@ -479,6 +483,8 @@ Resources:
     Properties:
       FunctionName: !Sub "moodjournal-create-reflection-${Environment}"
       Handler: handlers.create_reflection.lambda_handler
+      # Generating prose takes longer than classifying, and Gemini is retried
+      # with backoff on top of that; see MAX_ATTEMPTS in gemini_service.py.
       Timeout: 90
       Policies:
         - DynamoDBCrudPolicy:
