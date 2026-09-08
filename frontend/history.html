@@ -193,7 +193,7 @@
         try {
           const entry = await getEntry(entryId);
           const localNote = entry.classificationFallback
-            ? `<div class="alert alert-warning text-sm">Mood classification used the local fallback so you can test without a Gemini key.</div>`
+            ? `<div class="alert alert-warning text-sm">Automatic mood classification was unavailable for this entry, so it was saved as Neutral.</div>`
             : "";
           const modal = createModal(
             "historyEntryModal",

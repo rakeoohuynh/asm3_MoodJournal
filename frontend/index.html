@@ -50,7 +50,7 @@
                   <label for="entryContent" class="required">What's on your mind?</label>
                   <span class="text-sm text-muted"><span id="contentCount">0</span>/5000</span>
                 </div>
-                <textarea id="entryContent" name="entryContent" maxlength="5000" placeholder="Write freely. Your thoughts are private in this local test session." required></textarea>
+                <textarea id="entryContent" name="entryContent" maxlength="5000" placeholder="Write freely. Only you can see your entries." required></textarea>
               </div>
 
               <div id="errorAlert" class="hidden"></div>
@@ -149,7 +149,7 @@
         try {
           const { entry } = await api.get(`/entries/${encodeURIComponent(entryId)}`);
           const fallback = entry.classificationFallback
-            ? `<div class="alert alert-warning text-sm">This mood was produced by the local fallback classifier for testing.</div>`
+            ? `<div class="alert alert-warning text-sm">Automatic mood classification was unavailable for this entry, so it was saved as Neutral.</div>`
             : "";
           const modal = createModal(
             "entryViewModal",
@@ -238,7 +238,7 @@
             : await api.post("/entries", payload);
 
           successAlert.className = "alert alert-success";
-          successAlert.textContent = `${editingEntryId ? "Entry updated" : "Entry saved"} · Mood: ${data.entry.mood}${data.entry.classificationFallback ? " (local fallback)" : ""}`;
+          successAlert.textContent = `${editingEntryId ? "Entry updated" : "Entry saved"} · Mood: ${data.entry.mood}${data.entry.classificationFallback ? " (not classified)" : ""}`;
           successAlert.classList.remove("hidden");
           setFormMode(null);
           entryForm.reset();

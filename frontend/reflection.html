@@ -31,7 +31,7 @@
 
           <div class="alert alert-info" style="margin-bottom: 2rem">
             <div>
-              <strong>About reflections:</strong> If a Gemini API key is configured, the backend can generate a Gemini reflection from aggregated mood statistics. Without a key, local test mode generates a clearly labelled offline fallback so the feature can still be tested end-to-end. Reflections are for personal journaling only and are not medical or professional advice.
+              <strong>About reflections:</strong> Reflections are written by Google Gemini from aggregated mood statistics — counts, averages and entry titles. The text of your entries is never sent. One is generated automatically each week; you can also request one for any period below. Reflections are for personal journaling only and are not medical or professional advice.
             </div>
           </div>
 
@@ -79,7 +79,10 @@
       function reflectionCard(reflection) {
         const card = document.createElement("div");
         card.className = "card reflection-card";
-        const isGemini = reflection.generatedBy === "gemini";
+        // The backend records who asked for the reflection: "scheduled" means
+        // EventBridge generated it automatically, "manual" means this button.
+        const isScheduled = String(reflection.generatedBy || "").startsWith("scheduled");
+        const sourceLabel = isScheduled ? "Automatic (weekly)" : "Generated on request";
         card.innerHTML = `
           <div class="card-header">
             <div>
@@ -87,7 +90,7 @@
               <div class="text-sm text-muted">${formatDate(reflection.periodStart)} to ${formatDate(reflection.periodEnd)}</div>
             </div>
             <div class="reflection-meta">
-              <span class="badge ${isGemini ? "badge-primary" : "badge-warning"}">${isGemini ? "Gemini" : "Local fallback"}</span>
+              <span class="badge ${isScheduled ? "badge-success" : "badge-primary"}">${sourceLabel}</span>
               <span class="text-sm text-muted">${reflection.entryCount} entries · ${getRelativeTime(reflection.createdAt)}</span>
             </div>
           </div>
@@ -147,8 +150,7 @@
 
         try {
           const data = await api.post("/reflections", { period });
-          const source = data.reflection.generatedBy === "gemini" ? "Gemini" : "local fallback";
-          showSuccess(`Reflection generated using ${source}.`);
+          showSuccess(`Reflection generated from ${data.reflection.entryCount} entries.`);
           await loadReflections(true);
         } catch (err) {
           errorAlert.textContent = err.message || "Failed to generate reflection.";

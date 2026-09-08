@@ -272,10 +272,12 @@ function getMoodColor(mood) {
 function renderMoodBadge(mood, confidence = 0, fallback = false) {
   const safeMood = String(mood || "NEUTRAL").toUpperCase();
   const confPercent = Math.round((Number(confidence) || 0) * 100);
-  const fallbackTitle = fallback ? ' title="Local fallback classification"' : "";
+  const fallbackTitle = fallback
+    ? ' title="Automatic classification was unavailable; saved as Neutral"'
+    : "";
   return `
     <span class="mood-badge mood-${safeMood.toLowerCase()}"${fallbackTitle}>
-      ${safeMood} · ${confPercent}%${fallback ? " · local" : ""}
+      ${safeMood} · ${confPercent}%${fallback ? " · unclassified" : ""}
     </span>
   `;
 }
