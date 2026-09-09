@@ -23,7 +23,11 @@ Parameters:
   # release, which is the most heavily used and the first to answer 503.
   GeminiModels:
     Type: String
-    Default: gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.5-flash
+    # Flash-Lite first: it carries the most generous rate limit of the three
+    # (15 requests/minute against 5 for the full Flash models) and is more than
+    # capable of classifying a mood or writing five sentences. The heavier
+    # models are the fallbacks, not the default.
+    Default: gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.6-flash
     Description: >-
       Comma-separated Gemini models, tried in order. Each has its own rate limit
       and daily allowance, so listing several makes a busy model a non-event.

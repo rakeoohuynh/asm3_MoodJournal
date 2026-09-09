@@ -37,7 +37,7 @@ API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # reason to give up - it is a reason to ask a different one. The "-latest"
 # aliases are deliberately absent: they track Google's newest release, which is
 # the most heavily used and the first to answer 503 under load.
-DEFAULT_MODELS = "gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.5-flash"
+DEFAULT_MODELS = "gemini-3.5-flash-lite,gemini-3.5-flash,gemini-3.6-flash"
 
 
 def model_sequence() -> list[str]:
@@ -47,8 +47,12 @@ def model_sequence() -> list[str]:
     by redeploying with a new parameter and tests can vary it.
     """
     raw = os.environ.get("GEMINI_MODELS") or os.environ.get("GEMINI_MODEL") or DEFAULT_MODELS
-    models = [m.strip() for m in raw.split(",") if m.strip()]
-    return models or DEFAULT_MODELS.split(",")
+    # The value passes through a shell, the SAM CLI and CloudFormation before it
+    # arrives here, and `--parameter-overrides` needs its commas escaped on the
+    # way. Strip whatever quoting survived that journey: a stray backslash would
+    # otherwise become part of the model name and turn every call into a 404.
+    models = [m.strip().strip("\\").strip() for m in raw.split(",")]
+    return [m for m in models if m] or DEFAULT_MODELS.split(",")
 
 # Gemini answers a demand spike with 503 "try again later", so attempts are
 # spaced out rather than fired back to back.

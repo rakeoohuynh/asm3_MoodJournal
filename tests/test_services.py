@@ -260,6 +260,24 @@ def _record_models(monkeypatch, behaviour):
     return used
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "model-a,model-b",
+        "model-a\\,model-b",          # commas escaped for --parameter-overrides
+        " model-a , model-b ",        # stray whitespace
+    ],
+    ids=["plain", "escaped-commas", "whitespace"],
+)
+def test_model_list_survives_shell_and_cloudformation_quoting(monkeypatch, raw):
+    """A stray backslash would become part of the name and 404 every call."""
+    from services import gemini_service
+
+    monkeypatch.setenv("GEMINI_MODELS", raw)
+
+    assert gemini_service.model_sequence() == ["model-a", "model-b"]
+
+
 def test_a_busy_model_is_skipped_for_the_next_one(monkeypatch):
     """503 on one model must not end the attempt - other models have capacity."""
     from services import gemini_service
