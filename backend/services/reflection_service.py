@@ -9,7 +9,7 @@ from collections import Counter
 
 from models.reflection import Reflection
 from repositories.journal_repository import JournalRepository
-from services import gemini_service
+from services import gemini_service, offline_reflection
 from services.analytics_service import date_range
 from utils.logging_config import get_logger
 
@@ -65,10 +65,25 @@ def create_reflection(
         raise NoEntriesError(f"No entries between {start_date} and {end_date}")
 
     period_label = _PERIOD_LABELS.get(days, f"the last {days} days")
-    summary_text = gemini_service.generate_reflection(
-        period_label=period_label,
-        summary_data=_build_summary_data(entries),
-    )
+
+    # Gemini answers a busy model with 503, and asking for several sentences of
+    # prose is refused sooner than the small classification calls are. Failing
+    # the whole request would leave the user with an error and nothing to read,
+    # so the summary is written from the same aggregates instead. The stored
+    # record is marked, so nothing presents this as Gemini's work.
+    try:
+        summary_text = gemini_service.generate_reflection(
+            period_label=period_label,
+            summary_data=_build_summary_data(entries),
+        )
+    except gemini_service.GeminiError as exc:
+        logger.warning(
+            "Gemini unavailable for user %s (%s); writing the summary offline",
+            user_id,
+            exc,
+        )
+        summary_text = offline_reflection.build_reflection(entries, days)
+        generated_by = f"{generated_by}-offline"
 
     reflection = Reflection(
         user_id=user_id,

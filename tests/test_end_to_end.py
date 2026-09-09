@@ -346,20 +346,27 @@ def test_reflection_with_no_entries_returns_a_clear_message(wired):
     assert "no entries" in body_of(response)["error"]["message"].lower()
 
 
-def test_reflection_reports_a_clean_error_when_gemini_fails(wired):
-    """Gemini's raw error body must not reach the browser."""
+def test_reflection_falls_back_to_an_offline_summary_when_gemini_fails(wired):
+    """A busy Gemini must not leave the user with an error and nothing to read."""
     user = auth_service.register(USERNAME, PASSWORD, repo=wired["users"])
-    journal_service.create_entry(
-        user_id=user.user_id, title="Today", content="A day.",
-        entry_date=utc_today().isoformat(), repo=wired["journals"],
-    )
+    for days_ago, mood in enumerate(["POSITIVE", "POSITIVE", "ANXIOUS", "NEUTRAL"]):
+        wired["gemini"]["mood"] = mood
+        journal_service.create_entry(
+            user_id=user.user_id, title=f"Day {days_ago}", content="Something happened.",
+            entry_date=(utc_today() - timedelta(days=days_ago)).isoformat(),
+            repo=wired["journals"],
+        )
     wired["gemini"]["fail"] = True
 
     response = create_reflection.lambda_handler(
         http_event(user_id=user.user_id, body={"period": "7d"}), None
     )
 
-    assert response["statusCode"] == 502
-    message = body_of(response)["error"]["message"]
-    assert "try again later" in message.lower()
-    assert "quota" not in message.lower(), "Gemini's raw error must not be echoed to the browser"
+    assert response["statusCode"] == 201, "the user gets a reflection, not an error"
+    reflection = body_of(response)["reflection"]
+
+    # Marked so the interface can say it was not written by Gemini.
+    assert reflection["generatedBy"].endswith("-offline")
+    # And built from the real figures, not invented.
+    assert "4 entries" in reflection["summary"]
+    assert reflection["entryCount"] == 4

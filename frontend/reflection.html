@@ -82,8 +82,19 @@
         card.className = "card reflection-card";
         // The backend records who asked for the reflection: "scheduled" means
         // EventBridge generated it automatically, "manual" means this button.
-        const isScheduled = String(reflection.generatedBy || "").startsWith("scheduled");
+        // An "-offline" suffix means Gemini was unavailable and the summary was
+        // written from the stored figures instead - say so rather than let it
+        // pass as AI-written.
+        const generatedBy = String(reflection.generatedBy || "");
+        const isScheduled = generatedBy.startsWith("scheduled");
+        const isOffline = generatedBy.endsWith("-offline");
         const sourceLabel = isScheduled ? "Automatic (weekly)" : "Generated on request";
+        const offlineNote = isOffline
+          ? `<div class="alert alert-warning text-sm" style="margin-bottom:1rem">
+               Gemini was unavailable, so this summary was written from your stored
+               mood figures rather than by the AI. The numbers are your real data.
+             </div>`
+          : "";
         card.innerHTML = `
           <div class="card-header">
             <div>
@@ -96,6 +107,7 @@
             </div>
           </div>
           <div class="card-body mb-0">
+            ${offlineNote}
             <p class="reflection-text">${escapeHtml(reflection.summary)}</p>
             <div class="alert alert-info mb-0"><div class="text-sm">${escapeHtml(reflection.disclaimer)}</div></div>
           </div>`;
