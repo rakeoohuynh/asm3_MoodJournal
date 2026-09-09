@@ -14,17 +14,19 @@ Parameters:
     NoEcho: true
     Description: Google Gemini API key used for mood classification
 
-  # Rate limits and capacity are per model, so switching gives both a quieter
-  # queue and a fresh daily allowance. The "-latest" aliases track Google's
-  # newest model, which is also the most heavily used and the most likely to
-  # answer 503 "experiencing high demand"; a settled release is calmer and more
-  # than capable of classifying a mood or writing five sentences.
-  GeminiModel:
+  # Rate limits and capacity are per model, so a busy or exhausted model is a
+  # reason to ask a different one rather than to give up. Each attempt uses the
+  # next model in this list, which means a 503 or a spent daily allowance is
+  # handled without anyone intervening.
+  #
+  # The "-latest" aliases are deliberately absent: they track Google's newest
+  # release, which is the most heavily used and the first to answer 503.
+  GeminiModels:
     Type: String
-    Default: gemini-2.5-flash
+    Default: gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.5-flash
     Description: >-
-      Gemini model to call. Change this if the current one starts returning 503.
-      Examples: gemini-2.5-flash, gemini-3.5-flash, gemini-3.5-flash-lite.
+      Comma-separated Gemini models, tried in order. Each has its own rate limit
+      and daily allowance, so listing several makes a busy model a non-event.
 
   JwtSecret:
     Type: String
@@ -69,7 +71,7 @@ Globals:
         ATHENA_OUTPUT_LOCATION: !Sub "s3://${AnalyticsBucket}/athena-results/"
         ATHENA_WORKGROUP: !Ref AthenaWorkGroup
         GEMINI_API_KEY: !Ref GeminiApiKey
-        GEMINI_MODEL: !Ref GeminiModel
+        GEMINI_MODELS: !Ref GeminiModels
         JWT_SECRET: !Ref JwtSecret
         LOG_LEVEL: !Ref LogLevel
         CORS_ALLOWED_ORIGIN: !Ref CorsAllowedOrigin

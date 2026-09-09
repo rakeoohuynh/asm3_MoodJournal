@@ -7,6 +7,7 @@ stub repository and Gemini is patched, so no AWS or network access is needed.
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import pytest
@@ -236,51 +237,78 @@ def test_dashboard_average_is_none_when_empty(journals):
 # ---------------------------------------------------------------------------
 
 
-def _counting_generate(monkeypatch, error):
-    """Replace the HTTP call and count how many times it is attempted."""
-    from services import gemini_service
+def _record_models(monkeypatch, behaviour):
+    """Replace the HTTP call and record which model each attempt used.
 
-    calls = {"n": 0}
-
-    def _fake(prompt, json_output=False):
-        calls["n"] += 1
-        raise error
-
-    monkeypatch.setattr(gemini_service, "_generate", _fake)
-    return calls
-
-
-def test_quota_errors_are_not_retried(monkeypatch):
-    """429 means the daily allowance is spent.
-
-    Retrying cannot succeed and each attempt spends more of an allowance that
-    has already run out, so it must cost exactly one call.
+    `behaviour` maps a model name to the exception it should raise, or to the
+    text it should return.
     """
     from services import gemini_service
 
-    calls = _counting_generate(
-        monkeypatch, gemini_service.GeminiError("quota exceeded", status_code=429)
-    )
+    used = []
 
-    result = gemini_service.classify_mood("anything")
+    def _fake(prompt, json_output=False, model=None):
+        used.append(model)
+        outcome = behaviour(model)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
-    assert calls["n"] == 1, "a quota error must not be retried"
-    assert result.fallback is True
+    monkeypatch.setattr(gemini_service, "_generate", _fake)
+    monkeypatch.setattr(gemini_service, "RETRY_BACKOFF_SECONDS", (0, 0, 0))
+    monkeypatch.setenv("GEMINI_MODELS", "model-a,model-b,model-c")
+    return used
 
 
-def test_transient_server_errors_are_retried(monkeypatch):
-    """503 means the model is busy; a moment later it may well answer."""
+def test_a_busy_model_is_skipped_for_the_next_one(monkeypatch):
+    """503 on one model must not end the attempt - other models have capacity."""
     from services import gemini_service
 
-    calls = _counting_generate(
-        monkeypatch, gemini_service.GeminiError("model overloaded", status_code=503)
+    good = json.dumps({"mood": "POSITIVE", "confidence": 0.9, "shortReason": "ok"})
+    used = _record_models(
+        monkeypatch,
+        lambda m: good
+        if m == "model-b"
+        else gemini_service.GeminiError("busy", status_code=503),
     )
-    monkeypatch.setattr(gemini_service, "RETRY_BACKOFF_SECONDS", (0, 0, 0))
 
     result = gemini_service.classify_mood("anything")
 
-    assert calls["n"] == gemini_service.MAX_ATTEMPTS
-    assert result.fallback is True
+    assert used == ["model-a", "model-b"], "it should move on rather than retry model-a"
+    assert result.mood == "POSITIVE"
+    assert result.fallback is False
+
+
+def test_an_exhausted_model_is_not_asked_twice(monkeypatch):
+    """429 means that model's daily allowance is gone; the others still have theirs."""
+    from services import gemini_service
+
+    good = json.dumps({"mood": "NEUTRAL", "confidence": 0.7, "shortReason": "ok"})
+    used = _record_models(
+        monkeypatch,
+        lambda m: good
+        if m == "model-c"
+        else gemini_service.GeminiError("quota exceeded", status_code=429),
+    )
+
+    result = gemini_service.classify_mood("anything")
+
+    assert used == ["model-a", "model-b", "model-c"]
+    assert len(used) == len(set(used)), "an exhausted model must not be asked again"
+    assert result.fallback is False
+
+
+def test_every_model_failing_falls_back_without_raising(monkeypatch):
+    from services import gemini_service
+
+    used = _record_models(
+        monkeypatch, lambda m: gemini_service.GeminiError("busy", status_code=503)
+    )
+
+    result = gemini_service.classify_mood("anything")
+
+    assert used == ["model-a", "model-b", "model-c"]
+    assert result.fallback is True, "the entry is still saved, marked unclassified"
 
 
 def test_a_writer_ahead_of_utc_can_record_and_see_todays_entry(journals, fake_gemini):

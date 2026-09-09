@@ -29,11 +29,26 @@ from utils.logging_config import get_logger, redact
 
 logger = get_logger(__name__)
 
-# An alias rather than a pinned version: pinned models get retired and start
-# returning 404 to new API keys, which silently degrades every classification
-# to the NEUTRAL fallback. Override with GEMINI_MODEL if a specific one is needed.
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+# Models are tried in order, and each attempt uses the next one.
+#
+# Rate limits and capacity are per model, so a busy or exhausted model is not a
+# reason to give up - it is a reason to ask a different one. The "-latest"
+# aliases are deliberately absent: they track Google's newest release, which is
+# the most heavily used and the first to answer 503 under load.
+DEFAULT_MODELS = "gemini-2.5-flash,gemini-3.5-flash-lite,gemini-3.5-flash"
+
+
+def model_sequence() -> list[str]:
+    """The models to try, in order.
+
+    Read at call time rather than import, so the deployed list can be changed
+    by redeploying with a new parameter and tests can vary it.
+    """
+    raw = os.environ.get("GEMINI_MODELS") or os.environ.get("GEMINI_MODEL") or DEFAULT_MODELS
+    models = [m.strip() for m in raw.split(",") if m.strip()]
+    return models or DEFAULT_MODELS.split(",")
 
 # Gemini answers a demand spike with 503 "try again later", so attempts are
 # spaced out rather than fired back to back.
@@ -44,13 +59,15 @@ API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # the daily allowance faster. Under load Gemini regularly takes more than ten
 # seconds, so it is given time to answer instead.
 #
-# Fewer, more patient attempts, sized to fit inside the 60s timeout that
-# template.yaml gives the entry-writing functions:
+# One attempt per model in DEFAULT_MODELS. The pauses are short because each
+# attempt goes to a different model rather than waiting for a busy one to
+# recover; they exist only so a burst of failures is not instantaneous.
 #
-#     3 attempts x 15s  +  1s + 3s of waiting  =  49s worst case
+#     3 attempts x 15s  +  0.5s + 1s of waiting  =  46s worst case,
+#     inside the 60s that template.yaml gives the entry-writing functions.
 MAX_ATTEMPTS = 3
 REQUEST_TIMEOUT_SECONDS = 15
-RETRY_BACKOFF_SECONDS = (1.0, 3.0)
+RETRY_BACKOFF_SECONDS = (0.5, 1.0)
 
 # Strips ```json ... ``` fences that the model sometimes adds despite the prompt.
 _FENCE_PATTERN = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
@@ -172,9 +189,20 @@ def _extract_text(payload: dict[str, Any]) -> str:
     return text
 
 
-def _generate(prompt: str, json_output: bool = False) -> str:
+def _attempt_plan() -> list[str]:
+    """Which model each attempt should use.
+
+    With several models configured, every attempt goes to a different one. With
+    a single model, the attempts repeat against it as a plain retry.
+    """
+    models = model_sequence()
+    return [models[i % len(models)] for i in range(MAX_ATTEMPTS)]
+
+
+def _generate(prompt: str, json_output: bool = False, model: str | None = None) -> str:
     """Send one prompt to Gemini and return the generated text."""
-    url = f"{API_BASE}/{MODEL_NAME}:generateContent"
+    model = model or model_sequence()[0]
+    url = f"{API_BASE}/{model}:generateContent"
     body: dict[str, Any] = {"contents": [{"parts": [{"text": prompt}]}]}
     if json_output:
         # Asking for JSON directly means the fence stripping below is only a
@@ -244,30 +272,39 @@ def parse_mood_response(raw_text: str) -> MoodResult:
 def classify_mood(journal_text: str) -> MoodResult:
     """Classify one journal entry.
 
-    Tries twice. If both attempts fail, returns NEUTRAL with fallback=True so
-    the entry can still be saved.
+    Each attempt asks a different model, so a busy or exhausted one is skipped
+    rather than retried. If every model fails, returns NEUTRAL with
+    fallback=True so the entry is still saved and the interface can say the
+    mood was not determined.
     """
     logger.info("Classifying entry %s", redact(journal_text))
     prompt = CLASSIFY_PROMPT.format(journal_text=journal_text)
 
     last_error: Exception | None = None
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    finished: set[str] = set()
+
+    for attempt, model in enumerate(_attempt_plan(), start=1):
+        # A model that answered 429 has no allowance left, and one that answered
+        # 404 does not exist for this key. Asking it again would waste the
+        # attempt, so it is skipped and the next model gets the turn.
+        if model in finished:
+            continue
         try:
-            raw = _generate(prompt, json_output=True)
+            raw = _generate(prompt, json_output=True, model=model)
             result = parse_mood_response(raw)
             logger.info(
-                "Classified as %s (confidence %.2f) on attempt %d",
+                "Classified as %s (confidence %.2f) by %s on attempt %d",
                 result.mood,
                 result.confidence,
+                model,
                 attempt,
             )
             return result
-        except Exception as exc:  # noqa: BLE001 - any failure should retry then fall back
+        except Exception as exc:  # noqa: BLE001 - any failure moves to the next model
             last_error = exc
-            logger.warning("Classification attempt %d failed: %s", attempt, exc)
+            logger.warning("Classification attempt %d (%s) failed: %s", attempt, model, exc)
             if not _should_retry(exc):
-                logger.warning("Not retryable; giving up after attempt %d", attempt)
-                break
+                finished.add(model)
             _pause_before_retry(attempt)
 
     logger.error("Classification failed after %d attempts: %s", MAX_ATTEMPTS, last_error)
@@ -283,24 +320,33 @@ def generate_reflection(period_label: str, summary_data: str) -> str:
     """Generate a reflection summary from aggregated mood data.
 
     Only aggregated counts are sent, not full journal text, which keeps the
-    request small and limits how much private content leaves AWS. Tries
-    twice, since a transient error (e.g. a 503 while the model is under
-    heavy load) should not immediately fall back to the local summary.
+    request small and limits how much private content leaves AWS.
+
+    Each attempt asks a different model. Raises GeminiError only when every
+    configured model has refused; reflection_service then writes the summary
+    offline rather than failing the request.
     """
     prompt = REFLECTION_PROMPT.format(
         period_label=period_label, summary_data=summary_data
     )
 
     last_error: Exception | None = None
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    finished: set[str] = set()
+
+    for attempt, model in enumerate(_attempt_plan(), start=1):
+        if model in finished:
+            continue
         try:
-            return _strip_fences(_generate(prompt)).strip()
-        except Exception as exc:  # noqa: BLE001 - any failure should retry then raise
+            text = _strip_fences(_generate(prompt, model=model)).strip()
+            logger.info("Reflection written by %s on attempt %d", model, attempt)
+            return text
+        except Exception as exc:  # noqa: BLE001 - any failure moves to the next model
             last_error = exc
-            logger.warning("Reflection generation attempt %d failed: %s", attempt, exc)
+            logger.warning(
+                "Reflection generation attempt %d (%s) failed: %s", attempt, model, exc
+            )
             if not _should_retry(exc):
-                logger.warning("Not retryable; giving up after attempt %d", attempt)
-                break
+                finished.add(model)
             _pause_before_retry(attempt)
 
     logger.error("Reflection generation failed after %d attempts: %s", MAX_ATTEMPTS, last_error)
