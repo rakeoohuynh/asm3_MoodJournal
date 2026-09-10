@@ -103,6 +103,15 @@ class JournalRepository:
 
         response = self._table.query(**params)
         entries = [JournalEntry.from_item(i) for i in response.get("Items", [])]
+
+        # The sort key is ENTRY#{entryDate}#{entryId}, so DynamoDB orders by
+        # date and then by a random UUID. Entries written on the same day come
+        # back in arbitrary order, which reads as though the list is unsorted -
+        # today's newest entry can appear below one written this morning.
+        # Ordering the page by createdAt puts same-day entries right. Dates are
+        # already correct from the key condition, so this only settles the tie.
+        entries.sort(key=lambda e: (e.entry_date, e.created_at), reverse=True)
+
         return entries, response.get("LastEvaluatedKey")
 
     def list_entries_in_range(

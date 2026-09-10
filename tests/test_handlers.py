@@ -100,6 +100,30 @@ def test_mood_filter_is_applied(journals, monkeypatch):
     assert entries[0]["mood"] == "POSITIVE"
 
 
+def test_same_day_entries_are_newest_first(journals, monkeypatch):
+    """The sort key tiebreaks on a random UUID, so order must come from createdAt.
+
+    Without this the newest entry of the day can appear below an older one,
+    which looks like the list simply is not sorted.
+    """
+    monkeypatch.setattr(list_entries, "JournalRepository", lambda: journals)
+    today = utc_today().isoformat()
+    for title, created in [
+        ("written first", "2026-09-10T01:00:00+00:00"),
+        ("written last", "2026-09-10T09:00:00+00:00"),
+        ("written second", "2026-09-10T05:00:00+00:00"),
+    ]:
+        journals.put_entry(
+            JournalEntry(user_id="user-1", title=title, content="x",
+                         entry_date=today, mood="NEUTRAL", created_at=created)
+        )
+
+    response = list_entries.lambda_handler(api_event(method="GET"), None)
+
+    titles = [e["title"] for e in body_of(response)["entries"]]
+    assert titles == ["written last", "written second", "written first"]
+
+
 def test_invalid_mood_is_a_400(journals, monkeypatch):
     monkeypatch.setattr(list_entries, "JournalRepository", lambda: journals)
 
