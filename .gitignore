@@ -68,3 +68,5 @@ athena-results/
 # Node modules (if using npm)
 node_modules/
 package-lock.json
+
+.claude

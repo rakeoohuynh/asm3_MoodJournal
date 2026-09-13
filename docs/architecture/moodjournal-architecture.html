@@ -1,0 +1,468 @@
+<!-- MoodJournal AWS architecture, drawn on an HTML5 canvas with no external libraries.
+     Source of truth: infrastructure/template.yaml, backend/handlers, backend/repositories,
+     backend/services, frontend/*.html and frontend/js/common.js (branch aws-db-test @ f37f632).
+     Press "S" in the browser to download the canvas as a PNG. -->
+<title>MoodJournal AWS architecture</title>
+<style>html,body{margin:0;background:#fff}canvas{display:block}</style>
+<canvas id="c"></canvas>
+<script>
+const W = 3340, H = 1800;
+const dpr = Math.max(1, window.devicePixelRatio || 1);
+const cv = document.getElementById("c");
+cv.width = W * dpr; cv.height = H * dpr;
+cv.style.width = W + "px"; cv.style.height = H + "px";
+const ctx = cv.getContext("2d");
+ctx.scale(dpr, dpr);
+
+const FONT = '"Segoe UI", Arial, Helvetica, sans-serif';
+const C = {
+  ink: "#232F3E", muted: "#545B64", border: "#879196", soft: "#F7F8F8",
+  req: "#232F3E", data: "#1A73E8", sched: "#E7157B", ext: "#6B4FBB",
+  lambda: "#ED7100", api: "#8C4FFF", ddb: "#C925D1", s3: "#7AA116",
+  cdn: "#8C4FFF", analytics: "#8C4FFF", events: "#E7157B", watch: "#E7157B", iam: "#DD344C",
+};
+
+// ---------- primitives ----------
+const font = (s, w = "400", st = "") => `${st} ${w} ${s}px ${FONT}`;
+
+function wrap(t, maxW, s, w = "400") {
+  ctx.font = font(s, w);
+  const out = [];
+  for (const para of String(t).split("\n")) {
+    let line = "";
+    for (const word of para.split(" ")) {
+      const test = line ? line + " " + word : word;
+      if (!line || ctx.measureText(test).width <= maxW) line = test;
+      else { out.push(line); line = word; }
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+function text(t, x, y, o = {}) {
+  const s = o.size || 12, w = o.weight || "400", st = o.style || "";
+  let size = s;
+  if (o.fit && o.maxW) {
+    ctx.font = font(size, w, st);
+    while (size > 7.5 && ctx.measureText(t).width > o.maxW) { size -= 0.25; ctx.font = font(size, w, st); }
+  }
+  const lines = o.maxW && !o.fit ? wrap(t, o.maxW, size, w) : String(t).split("\n");
+  const lh = o.lh || Math.round(size * 1.28);
+  ctx.font = font(size, w, st);
+  ctx.fillStyle = o.color || C.ink;
+  ctx.textAlign = o.align || "left";
+  ctx.textBaseline = "alphabetic";
+  lines.forEach((l, i) => ctx.fillText(l, x, y + i * lh));
+  return lines.length * lh;
+}
+
+function rect(x, y, w, h, o = {}) {
+  ctx.save();
+  ctx.beginPath();
+  const r = o.r ?? 4;
+  ctx.roundRect ? ctx.roundRect(x, y, w, h, r) : ctx.rect(x, y, w, h);
+  if (o.fill) { ctx.fillStyle = o.fill; ctx.fill(); }
+  if (o.stroke !== null) {
+    ctx.setLineDash(o.dash || []);
+    ctx.lineWidth = o.lw || 1.2;
+    ctx.strokeStyle = o.stroke || C.border;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// Simple service glyph: coloured rounded square with a white abbreviation.
+function icon(x, y, size, color, glyph, o = {}) {
+  rect(x, y, size, size, { fill: color, stroke: o.stroke ?? null, r: 5 });
+  const gs = glyph.length <= 1 ? size * 0.62 : glyph.length <= 3 ? size * 0.34 : size * 0.26;
+  text(glyph, x + size / 2, y + size / 2 + gs * 0.36, { size: gs, weight: "700", align: "center", color: o.glyphColor || "#fff" });
+}
+
+function userGlyph(cx, y) {
+  ctx.save();
+  ctx.fillStyle = "#5B9BD5";
+  ctx.beginPath(); ctx.arc(cx, y + 14, 13, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath();
+  ctx.roundRect(cx - 22, y + 31, 44, 34, [18, 18, 4, 4]);
+  ctx.fill();
+  ctx.restore();
+}
+
+// ---------- edges (collected first so crossings can be drawn as line jumps) ----------
+const edges = [];
+function edge(pts, o = {}) { edges.push({ pts, ...o }); }
+
+function segments(e) {
+  const s = [];
+  for (let i = 0; i < e.pts.length - 1; i++) s.push([e.pts[i], e.pts[i + 1]]);
+  return s;
+}
+
+function drawEdges() {
+  const verticals = [];
+  edges.forEach((e, ei) => segments(e).forEach(([a, b]) => {
+    if (a[0] === b[0]) verticals.push({ ei, x: a[0], y1: Math.min(a[1], b[1]), y2: Math.max(a[1], b[1]) });
+  }));
+
+  for (const [ei, e] of edges.entries()) {
+    ctx.save();
+    ctx.strokeStyle = e.color || C.req;
+    ctx.lineWidth = e.lw || 1.6;
+    ctx.setLineDash(e.dash || []);
+    ctx.beginPath();
+    ctx.moveTo(...e.pts[0]);
+    for (const [a, b] of segments(e)) {
+      if (a[1] === b[1] && a[0] !== b[0]) {
+        const dir = b[0] > a[0] ? 1 : -1;
+        const lo = Math.min(a[0], b[0]), hi = Math.max(a[0], b[0]);
+        const hops = verticals
+          .filter(v => v.ei !== ei && v.x > lo + 8 && v.x < hi - 8 && v.y1 < a[1] - 2 && v.y2 > a[1] + 2)
+          .map(v => v.x)
+          .sort((p, q) => (p - q) * dir);
+        for (const hx of hops) {
+          ctx.lineTo(hx - dir * 7, a[1]);
+          if (dir > 0) ctx.arc(hx, a[1], 7, Math.PI, 2 * Math.PI, false);
+          else ctx.arc(hx, a[1], 7, 0, Math.PI, true);
+        }
+      }
+      ctx.lineTo(...b);
+    }
+    ctx.stroke();
+    ctx.restore();
+
+    if (e.head !== false) {
+      const [p, q] = e.pts.slice(-2);
+      const ang = Math.atan2(q[1] - p[1], q[0] - p[0]);
+      ctx.save();
+      ctx.fillStyle = e.color || C.req;
+      ctx.beginPath();
+      ctx.moveTo(q[0], q[1]);
+      ctx.lineTo(q[0] - 11 * Math.cos(ang - 0.4), q[1] - 11 * Math.sin(ang - 0.4));
+      ctx.lineTo(q[0] - 11 * Math.cos(ang + 0.4), q[1] - 11 * Math.sin(ang + 0.4));
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  for (const e of edges) if (e.label) drawLabel(e);
+}
+
+function drawLabel(e) {
+  const lp = e.lp || {};
+  const [a, b] = segments(e)[lp.seg || 0];
+  const t = lp.t ?? 0.5;
+  const x = a[0] + (b[0] - a[0]) * t, y = a[1] + (b[1] - a[1]) * t;
+  const size = lp.size || 10.5;
+  ctx.font = font(size, "600");
+  const tw = ctx.measureText(e.label).width;
+  const color = lp.color || C.ink;
+  ctx.save();
+  if (lp.side === "rot") {
+    ctx.translate(x, y);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(-tw / 2 - 4, -size / 2 - 3, tw + 8, size + 6);
+    text(e.label, 0, size * 0.36, { size, weight: "600", align: "center", color });
+  } else if (lp.side === "right") {
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(x + 6, y - size + 1, tw + 6, size + 5);
+    text(e.label, x + 9, y + 3, { size, weight: "600", color });
+  } else {
+    const ly = lp.side === "below" ? y + size + 6 : y - 7;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(x - tw / 2 - 4, ly - size, tw + 8, size + 5);
+    text(e.label, x, ly, { size, weight: "600", align: "center", color });
+  }
+  ctx.restore();
+}
+
+// ---------- layout constants ----------
+const X0 = 360, SW = 165;
+const sl = i => X0 + (i - 1) * SW, sc = i => sl(i) + SW / 2;
+const BUS_Y = 150, HDR_Y = 182, HDR_H = 72, API_Y = 330, API_H = 108;
+const LAM_Y = 520, LAM_H = 125, LAM_B = LAM_Y + LAM_H;
+const GEM_LANE = 760, TBL_Y = 830, TBL_H = 150, TBL_B = TBL_Y + TBL_H;
+
+// Every API route, in feature-column order. Names come from infrastructure/template.yaml.
+const SLOTS = [
+  { i: 1, m: "GET", p: "/health", id: "HealthFunction", fn: "moodjournal-health-{env}", h: "health.py", x: "128 MB · 10 s", pub: true },
+  { i: 2, m: "POST", p: "/auth/register", id: "RegisterFunction", fn: "moodjournal-register-{env}", h: "register.py", x: "1024 MB (scrypt)", pub: true },
+  { i: 3, m: "POST", p: "/auth/login", id: "LoginFunction", fn: "moodjournal-login-{env}", h: "login.py", x: "1024 MB (scrypt)", pub: true },
+  { i: 4, auth: true, id: "JwtAuthorizerFunction", fn: "moodjournal-jwt-authorizer-{env}", h: "jwt_authorizer.py", x: "256 MB · 10 s" },
+  { i: 5, m: "GET", p: "/auth/me", id: "GetMeFunction", fn: "moodjournal-get-me-{env}", h: "get_me.py", x: "30 s" },
+  { i: 6, m: "POST", p: "/auth/change-password", id: "ChangePasswordFunction", fn: "moodjournal-change-password-{env}", h: "change_password.py", x: "1024 MB (scrypt)" },
+  { i: 7, m: "GET", p: "/analytics/athena", id: "RunAthenaQueryFunction", fn: "moodjournal-run-athena-query-{env}", h: "run_athena_query.py", x: "60 s" },
+  { i: 8, m: "POST", p: "/analytics/export", id: "ExportAnalyticsFunction", fn: "moodjournal-export-analytics-{env}", h: "export_analytics.py", x: "300 s · also runs daily" },
+  { i: 9, m: "GET", p: "/entries", id: "ListEntriesFunction", fn: "moodjournal-list-entries-{env}", h: "list_entries.py", x: "30 s" },
+  { i: 10, m: "GET", p: "/entries/{entryId}", id: "GetEntryFunction", fn: "moodjournal-get-entry-{env}", h: "get_entry.py", x: "30 s" },
+  { i: 11, m: "DELETE", p: "/entries/{entryId}", id: "DeleteEntryFunction", fn: "moodjournal-delete-entry-{env}", h: "delete_entry.py", x: "30 s" },
+  { i: 12, m: "GET", p: "/dashboard", id: "GetDashboardFunction", fn: "moodjournal-get-dashboard-{env}", h: "get_dashboard.py", x: "30 s" },
+  { i: 13, m: "GET", p: "/reflections", id: "ListReflectionsFunction", fn: "moodjournal-list-reflections-{env}", h: "list_reflections.py", x: "30 s" },
+  { i: 14, m: "PUT", p: "/entries/{entryId}", id: "UpdateEntryFunction", fn: "moodjournal-update-entry-{env}", h: "update_entry.py", x: "60 s" },
+  { i: 15, m: "POST", p: "/entries", id: "CreateEntryFunction", fn: "moodjournal-create-entry-{env}", h: "create_entry.py", x: "60 s" },
+  { i: 16, m: "POST", p: "/reflections", id: "CreateReflectionFunction", fn: "moodjournal-create-reflection-{env}", h: "create_reflection.py", x: "90 s" },
+];
+
+// Client-facing features, confirmed against the fetch calls in frontend/.
+const FEATURES = [
+  { slots: [1], title: "Health check", sub: "⚠ not called by any page" },
+  { slots: [2], title: "Register", sub: "register.html via js/common.js" },
+  { slots: [3], title: "Login", sub: "login.html via js/common.js" },
+  { slots: [5, 6], title: "Account", sub: "every page: session check and change-password dialog (js/common.js)" },
+  { slots: [7, 8], title: "Analytics API", sub: "⚠ no page calls these two routes" },
+  { slots: [9, 10, 11], title: "Mood history", sub: "history.html (index.html also lists the last 3 and loads an entry to edit)" },
+  { slots: [12], title: "Mood dashboard", sub: "dashboard.html" },
+  { slots: [13], title: "View reflections", sub: "reflection.html" },
+  { slots: [14, 15], title: "Write / edit entry", sub: "index.html (history.html also edits)" },
+  { slots: [16], title: "Generate reflection", sub: "reflection.html" },
+];
+
+// ---------- title ----------
+text("Figure 1: Architectural diagram for MoodJournal", W / 2, 42, { size: 26, style: "italic", align: "center" });
+text("rakeoohuynh/asm3_MoodJournal · branch aws-db-test @ f37f632 · derived from infrastructure/template.yaml (AWS SAM), backend/ and frontend/",
+  W / 2, 68, { size: 13, align: "center", color: C.muted });
+
+// ---------- left panel: user, CloudFront, supporting services, logs ----------
+userGlyph(110, 88);
+text("User loads MoodJournal and interacts with the client interface (HTML, CSS, vanilla JS)", 30, 168, { size: 12, maxW: 290 });
+
+icon(85, 300, 50, C.cdn, "CF");
+text("Amazon CloudFront", 110, 372, { size: 12.5, weight: "700", align: "center" });
+text("redirect-to-https · CachingOptimized", 110, 388, { size: 10.5, align: "center", color: C.muted });
+text("403/404 → /index.html", 110, 402, { size: 10.5, align: "center", color: C.muted });
+
+rect(30, 480, 300, 300, { dash: [6, 4], stroke: "#687078" });
+text("Services used by CloudFront to serve the frontend", 180, 504, { size: 12, weight: "700", align: "center", maxW: 270 });
+icon(48, 540, 44, C.s3, "S3");
+text("Amazon S3 (frontend)", 104, 556, { size: 11.5, weight: "700" });
+text("moodjournal-frontend-{env}-{accountId}", 104, 571, { size: 10, fit: true, maxW: 216 });
+text("private · AES256 · public access blocked", 104, 585, { size: 10, color: C.muted, fit: true, maxW: 216 });
+icon(48, 620, 44, "#687078", "OAC");
+text("Origin Access Control", 104, 636, { size: 11.5, weight: "700" });
+text("s3 origin · sigv4 · signing always", 104, 651, { size: 10, color: C.muted });
+icon(48, 700, 44, C.iam, "IAM");
+text("S3 bucket policy", 104, 716, { size: 11.5, weight: "700" });
+text("cloudfront.amazonaws.com → s3:GetObject", 104, 731, { size: 10, fit: true, maxW: 216 });
+text("scoped to this distribution's ARN", 104, 745, { size: 10, color: C.muted });
+
+rect(30, 820, 300, 132, { fill: C.soft });
+icon(48, 838, 44, C.watch, "CW");
+text("Amazon CloudWatch Logs", 104, 855, { size: 11.5, weight: "700" });
+text("All 17 functions write structured JSON logs (Globals.LoggingConfig, ApplicationLogLevel = LogLevel). Journal text is never logged.",
+  48, 900, { size: 10.5, maxW: 266 });
+
+rect(30, 990, 300, 110, { fill: C.soft });
+text("Browser → API", 48, 1012, { size: 11.5, weight: "700" });
+text("Pages call API Gateway directly with fetch() and an Authorization: Bearer header. API_BASE_URL in js/config.js is written by deploy_frontend.ps1.",
+  48, 1030, { size: 10.5, maxW: 266 });
+
+edge([[110, 196], [110, 300]], { label: "Uses HTTPS", lp: { side: "rot" } });
+edge([[110, 412], [110, 480]], { label: "Gets static files from", lp: { side: "right", t: 0.45 } });
+
+// ---------- feature bus and headers ----------
+edge([[150, 105], [205, 105], [205, BUS_Y], [sc(16), BUS_Y]], { head: false });
+text("Application features", (205 + sc(16)) / 2, BUS_Y - 8, { size: 13, weight: "700", align: "center" });
+
+for (const f of FEATURES) {
+  const x1 = sl(f.slots[0]) + 8, x2 = sl(f.slots.at(-1)) + SW - 8, cx = (x1 + x2) / 2;
+  edge([[cx, BUS_Y], [cx, HDR_Y]]);
+  rect(x1, HDR_Y, x2 - x1, HDR_H, { fill: "#fff", stroke: "#687078" });
+  text(f.title, cx, HDR_Y + 20, { size: 13, weight: "700", align: "center" });
+  const warn = f.sub.startsWith("⚠");
+  text(f.sub, cx, HDR_Y + 37, { size: 10.5, align: "center", maxW: x2 - x1 - 12, color: warn ? "#B00020" : C.muted, lh: 13 });
+  for (const s of f.slots) {
+    const fx = f.slots.length === 1 ? cx : sc(s);
+    edge([[fx, HDR_Y + HDR_H], [fx, API_Y]], { label: "Requests", lp: { side: "rot", size: 9.5 } });
+  }
+}
+
+// ---------- authorizer band ----------
+rect(sl(5) - 8, API_Y - 12, sl(16) + SW - sl(5) + 16, API_H + 24, { dash: [7, 5], stroke: C.api, lw: 1.5 });
+text("JwtAuthorizer is the REST API's DefaultAuthorizer. Every route inside the dashed purple box is checked first (Authorization: Bearer <JWT>, policy cached 300 s). Register, Login and Health opt out with Authorizer: NONE.",
+  sl(4) + 8, 200, { size: 10.5, maxW: SW - 20, color: C.ink, lh: 13 });
+edge([[sl(5) - 8, 420], [sc(4), 420], [sc(4), LAM_Y]], { color: C.api, label: "Invokes first", lp: { seg: 1, side: "rot" } });
+
+// ---------- API Gateway routes and Lambda functions ----------
+for (const s of SLOTS) {
+  const x = sl(s.i), cx = sc(s.i);
+  if (!s.auth) {
+    rect(x + 10, API_Y, SW - 20, API_H, { fill: "#fff" });
+    icon(cx - 15, API_Y + 6, 30, C.api, "</>");
+    text("Amazon API Gateway", cx, API_Y + 52, { size: 10.5, weight: "700", align: "center", fit: true, maxW: SW - 28 });
+    text(s.m, cx, API_Y + 68, { size: 11.5, weight: "700", align: "center", color: C.api });
+    text(s.p, cx, API_Y + 83, { size: 11, align: "center", fit: true, maxW: SW - 28 });
+    if (s.pub) text("Auth: NONE (public)", cx, API_Y + 99, { size: 9.5, align: "center", color: C.muted });
+    edge([[cx, API_Y + API_H], [cx, LAM_Y]], { label: "Triggers", lp: { side: "rot", size: 9.5 } });
+  }
+  rect(x + 8, LAM_Y, SW - 16, LAM_H, { fill: "#fff", stroke: s.auth ? C.api : C.border, lw: s.auth ? 1.6 : 1.2 });
+  icon(cx - 15, LAM_Y + 6, 30, C.lambda, "λ");
+  text(s.id, cx, LAM_Y + 55, { size: 11, weight: "700", align: "center", fit: true, maxW: SW - 24 });
+  text(s.fn, cx, LAM_Y + 71, { size: 9.5, align: "center", fit: true, maxW: SW - 24 });
+  text("handlers/" + s.h, cx, LAM_Y + 86, { size: 9.5, align: "center", fit: true, maxW: SW - 24, color: C.muted });
+  text("AWS Lambda · " + s.x, cx, LAM_Y + 101, { size: 9.5, align: "center", fit: true, maxW: SW - 24, color: C.muted });
+  if (s.i === 8) text("(daily trigger shown below)", cx, LAM_Y + 116, { size: 9.5, align: "center", color: C.sched });
+}
+text("No dependencies: returns status, environment and time", sc(1), LAM_B + 24, { size: 10.5, align: "center", maxW: SW - 20, color: C.muted, lh: 13 });
+text("Verifies HS256 JWT with JWT_SECRET. No table read. Passes userId and username to handlers in the authorizer context.",
+  sc(4), LAM_B + 24, { size: 10.5, align: "center", maxW: SW - 20, color: C.muted, lh: 13 });
+
+// ---------- DynamoDB tables ----------
+const usersX1 = sl(2) + 10, usersX2 = sl(6) + SW - 10;
+rect(usersX1, TBL_Y, usersX2 - usersX1, TBL_H, { fill: "#FCF3FD", stroke: C.ddb, lw: 1.5 });
+icon(usersX1 + 12, TBL_Y + 72, 44, C.ddb, "DDB");
+text("Amazon DynamoDB: MoodJournalUsers-{env}", usersX1 + 66, TBL_Y + 88, { size: 13, weight: "700" });
+text("Partition key userId (S) · GSI UsernameIndex: username (S), projection ALL", usersX1 + 66, TBL_Y + 105, { size: 11 });
+text("On-demand · point-in-time recovery · SSE", usersX1 + 66, TBL_Y + 121, { size: 10.5, color: C.muted });
+
+const jX1 = sc(8) - 10, jX2 = sl(16) + SW - 10;
+rect(jX1, TBL_Y, jX2 - jX1, TBL_H, { fill: "#FCF3FD", stroke: C.ddb, lw: 1.5 });
+icon(jX1 + 12, TBL_Y + 72, 44, C.ddb, "DDB");
+text("Amazon DynamoDB: MoodJournalTable-{env} (single-table design: entries and reflections)", jX1 + 66, TBL_Y + 88, { size: 13, weight: "700" });
+text("PK = USER#{userId} · SK = ENTRY#{entryDate}#{entryId}  |  REFLECTION#{createdAt}#{reflectionId}", jX1 + 66, TBL_Y + 105, { size: 11 });
+text("No GSI: every read is a Query on one user's partition (date ranges on SK, mood and search as FilterExpression) · on-demand · PITR · SSE",
+  jX1 + 66, TBL_Y + 121, { size: 10.5, color: C.muted });
+
+// Per-function operations, read from backend/repositories and the scheduled handlers.
+const OPS = [
+  [2, sc(2), "Query UsernameIndex · PutItem (condition)", 150],
+  [3, sc(3), "Query UsernameIndex", 150],
+  [5, sc(5), "GetItem userId", 150],
+  [6, sc(6), "GetItem · UpdateItem passwordHash", 150],
+  [8, 1650, "Query ENTRY# (last 90 days)", 104],
+  [9, sc(9), "Query ENTRY# range + mood/search filter", 104],
+  [10, sc(10), "Query ENTRY# + filter entryId", 150],
+  [11, sc(11), "Query ENTRY# · DeleteItem", 150],
+  [12, sc(12), "Query ENTRY# range (7-90 days)", 150],
+  [13, sc(13), "Query REFLECTION#", 118],
+  [14, sl(14) + 45, "Query · DeleteItem if date changed · PutItem", 118],
+  [15, sl(15) + 45, "PutItem ENTRY#", 150],
+  [16, sl(16) + 45, "Query ENTRY# · PutItem REFLECTION#", 150],
+];
+for (const [, x, op, mw] of OPS) {
+  edge([[x, LAM_B], [x, TBL_Y]], { color: C.data, label: "Operates on table", lp: { side: "rot", t: 0.27, size: 9.5, color: C.data } });
+  text(op, x, TBL_Y + 18, { size: 10, align: "center", maxW: mw, lh: 12, color: C.ink });
+}
+
+// ---------- Gemini ----------
+const GX = 3040, GY = TBL_Y, GW = 250, GH = 130;
+rect(GX, GY, GW, GH, { fill: "#fff", stroke: C.ext, lw: 1.6 });
+icon(GX + 14, GY + 12, 38, "#fff", "AI", { stroke: "#687078", glyphColor: C.ext });
+text("Google Gemini API", GX + 62, GY + 30, { size: 13, weight: "700" });
+text("External service (not AWS)", GX + 62, GY + 46, { size: 10.5, color: C.muted });
+text("generateContent over HTTPS (x-goog-api-key). Models tried in order: gemini-3.5-flash-lite, gemini-3.5-flash, gemini-3.6-flash.",
+  GX + 14, GY + 70, { size: 10.5, maxW: GW - 26, lh: 13 });
+
+for (const i of [14, 15, 16]) edge([[sl(i) + SW - 40, LAM_B], [sl(i) + SW - 40, GEM_LANE]], { color: C.ext, head: false });
+edge([[sl(14) + SW - 40, GEM_LANE], [GX + GW / 2, GEM_LANE], [GX + GW / 2, GY]], {
+  color: C.ext, label: "Calls Gemini API", lp: { seg: 0, t: 0.88, color: C.ext },
+});
+
+// ---------- analytics pipeline ----------
+rect(1290, 1040, 500, 250, { dash: [6, 4], stroke: "#687078" });
+text("Analytics pipeline", 1780, 1058, { size: 12, weight: "700", align: "right" });
+
+rect(1310, 1080, 180, 90, { fill: "#fff" });
+icon(1320, 1090, 34, C.analytics, "ATH");
+text("Amazon Athena", 1362, 1103, { size: 11.5, weight: "700" });
+text("workgroup moodjournal-{env}", 1362, 1118, { size: 9.5, fit: true, maxW: 122 });
+text("4 named queries, userId", 1362, 1132, { size: 9.5, fit: true, maxW: 122, color: C.muted });
+text("passed as a parameter", 1362, 1145, { size: 9.5, fit: true, maxW: 122, color: C.muted });
+
+rect(1310, 1200, 180, 72, { fill: "#fff" });
+icon(1320, 1208, 30, C.analytics, "GLU");
+text("AWS Glue Data Catalog", 1358, 1221, { size: 10.5, weight: "700", fit: true, maxW: 126 });
+text("moodjournal_{env}", 1358, 1236, { size: 9.5, fit: true, maxW: 126 });
+text(".journal_entries (JSON)", 1358, 1249, { size: 9.5, fit: true, maxW: 126 });
+text("partition projection 2026-2035", 1320, 1265, { size: 9.5, fit: true, maxW: 164, color: C.muted });
+
+rect(1530, 1080, 230, 90, { fill: "#fff" });
+icon(1540, 1090, 34, C.s3, "S3");
+text("Amazon S3 (analytics)", 1582, 1103, { size: 11.5, weight: "700" });
+text("moodjournal-analytics-{env}-{acct}", 1582, 1118, { size: 9.5, fit: true, maxW: 172 });
+text("moodjournal/year=/month=/day=/", 1582, 1132, { size: 9.5, fit: true, maxW: 172, color: C.muted });
+text("{userId}.json · athena-results/ (7 days)", 1540, 1158, { size: 9.5, fit: true, maxW: 212, color: C.muted });
+
+text("Exports are JSON Lines holding derived fields only (mood, score, content length, never the journal text). Athena reads them through the Glue table.",
+  1510, 1200, { size: 10, maxW: 270, lh: 13, color: C.muted });
+
+edge([[sc(7), LAM_B], [sc(7), 1080]], { label: "Runs named query (StartQueryExecution)", lp: { side: "rot", t: 0.55 } });
+edge([[1558, LAM_B], [1558, 1080]], { color: C.data, label: "Writes to bucket (PutObject JSON Lines)", lp: { side: "rot", t: 0.55, color: C.data } });
+edge([[1490, 1125], [1530, 1125]], { color: C.data });
+edge([[1400, 1170], [1400, 1200]], {});
+
+// ---------- scheduled background jobs ----------
+rect(1860, 1040, 740, 305, { dash: [7, 5], stroke: C.sched, lw: 1.5 });
+text("Scheduled background jobs", 1875, 1302, { size: 12.5, weight: "700", color: C.sched });
+text("EventBridge Scheduler, no user request", 1875, 1320, { size: 10.5, color: C.sched });
+
+rect(1880, 1080, 200, 100, { fill: "#fff", stroke: C.sched, lw: 1.4 });
+icon(1890, 1088, 30, C.lambda, "λ");
+text("ExportAnalyticsFunction", 1928, 1100, { size: 11, weight: "700", fit: true, maxW: 146 });
+text("moodjournal-export-analytics-{env}", 1928, 1114, { size: 9.5, fit: true, maxW: 146 });
+text("Same function as POST /analytics/export. Scheduled run exports every user · 300 s", 1890, 1134, { size: 9.5, maxW: 182, lh: 12, color: C.muted });
+
+rect(2300, 1080, 200, 100, { fill: "#fff", stroke: C.sched, lw: 1.4 });
+icon(2310, 1088, 30, C.lambda, "λ");
+text("ScheduledReflectionFunction", 2348, 1100, { size: 11, weight: "700", fit: true, maxW: 146 });
+text("moodjournal-scheduled-reflection-{env}", 2348, 1114, { size: 9.5, fit: true, maxW: 146 });
+text("handlers/scheduled_reflection.py. Weekly reflection for every user · 300 s", 2310, 1134, { size: 9.5, maxW: 182, lh: 12, color: C.muted });
+
+rect(2130, 1240, 200, 90, { fill: "#fff", stroke: C.sched, lw: 1.4 });
+icon(2140, 1250, 34, C.events, "EB");
+text("Amazon EventBridge", 2182, 1263, { size: 11, weight: "700", fit: true, maxW: 142 });
+text("Scheduler (ScheduleV2)", 2182, 1277, { size: 10, fit: true, maxW: 142 });
+text("WeeklySchedule: rate(7 days)", 2140, 1303, { size: 10, fit: true, maxW: 182 });
+text("DailyExport: rate(1 day)", 2140, 1318, { size: 10, fit: true, maxW: 182 });
+
+edge([[2180, 1240], [2180, 1210], [1980, 1210], [1980, 1180]], { color: C.sched, dash: [7, 4], label: "Invokes · rate(1 day)", lp: { seg: 1, side: "below", color: C.sched } });
+edge([[2280, 1240], [2280, 1210], [2400, 1210], [2400, 1180]], { color: C.sched, dash: [7, 4], label: "Invokes · rate(7 days)", lp: { seg: 1, side: "below", color: C.sched } });
+
+edge([[2030, 1080], [2030, TBL_B]], { color: C.data, label: "Query ENTRY# (90 days)", lp: { side: "right", t: 0.62, color: C.data } });
+edge([[2400, 1080], [2400, TBL_B]], { color: C.data, label: "Query ENTRY# (7 days) · PutItem REFLECTION#", lp: { side: "right", t: 0.62, color: C.data } });
+edge([[1880, 1110], [1760, 1110]], { color: C.data, label: "PutObject", lp: { color: C.data } });
+edge([[1880, 1160], [1830, 1160], [1830, 1375], [940, 1375], [940, TBL_B]], { color: C.data, label: "Scans MoodJournalUsers (userId only) · daily", lp: { seg: 2, t: 0.5, color: C.data } });
+edge([[2470, 1180], [2470, 1400], [860, 1400], [860, TBL_B]], { color: C.data, label: "Scans MoodJournalUsers (userId only) · weekly", lp: { seg: 1, t: 0.3, side: "below", color: C.data } });
+edge([[2500, 1110], [GX + GW - 75, 1110], [GX + GW - 75, GY + GH]], { color: C.ext, label: "Calls API (generate_reflection)", lp: { seg: 0, t: 0.5, color: C.ext } });
+
+drawEdges();
+
+// ---------- legend, automated services, flags ----------
+const LY = 1460;
+ctx.save(); ctx.strokeStyle = "#D5DBDB"; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(30, LY - 20); ctx.lineTo(W - 30, LY - 20); ctx.stroke(); ctx.restore();
+
+text("Legend", 30, LY, { size: 15, weight: "700" });
+const legendLines = [
+  [C.req, [], "Request or trigger (browser → API Gateway → Lambda)"],
+  [C.data, [], "Read or write on DynamoDB or S3 (operation shown at the store)"],
+  [C.ext, [], "Call to the external Google Gemini API over HTTPS"],
+  [C.sched, [7, 4], "Scheduled invocation by EventBridge Scheduler"],
+  [C.api, [], "API Gateway invokes JwtAuthorizer before protected routes"],
+];
+legendLines.forEach(([color, dash, label], k) => {
+  const y = LY + 30 + k * 26;
+  ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1.8; ctx.setLineDash(dash);
+  ctx.beginPath(); ctx.moveTo(30, y - 4); ctx.lineTo(90, y - 4); ctx.stroke(); ctx.restore();
+  ctx.save(); ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(98, y - 4); ctx.lineTo(87, y - 9); ctx.lineTo(87, y + 1); ctx.fill(); ctx.restore();
+  text(label, 110, y, { size: 12 });
+});
+rect(30, LY + 162, 60, 26, { dash: [7, 5], stroke: C.api, lw: 1.5 });
+text("Routes protected by JwtAuthorizer", 110, LY + 180, { size: 12 });
+rect(30, LY + 198, 60, 26, { dash: [6, 4], stroke: "#687078" });
+text("Supporting services grouped for one feature", 110, LY + 216, { size: 12 });
+ctx.save(); ctx.strokeStyle = C.data; ctx.lineWidth = 1.8; ctx.beginPath(); ctx.moveTo(30, LY + 248); ctx.lineTo(53, LY + 248);
+ctx.arc(60, LY + 248, 7, Math.PI, 2 * Math.PI, false); ctx.lineTo(90, LY + 248); ctx.stroke(); ctx.restore();
+text("Line jump: lines cross without connecting", 110, LY + 252, { size: 12 });
+text("{env} = Environment parameter (dev, staging or prod). Lambda runtime python3.14, x86_64, 1024 MB and 30 s unless shown otherwise.",
+  30, LY + 290, { size: 11.5, maxW: 760, color: C.muted });
+
+// Press S to save a PNG copy.
+window.addEventListener("keydown", ev => {
+  if (ev.key.toLowerCase() !== "s") return;
+  const a = document.createElement("a");
+  a.download = "moodjournal-architecture.png";
+  a.href = cv.toDataURL("image/png");
+  a.click();
+});
+</script>
