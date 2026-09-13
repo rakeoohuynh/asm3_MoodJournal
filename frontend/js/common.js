@@ -443,7 +443,13 @@ async function handleChangePassword(e) {
     const api = new ApiClient();
     await api.post("/auth/change-password", { currentPassword, newPassword });
     closeChangePasswordModal();
-    showSuccess("Password updated successfully.");
+    // The old token stays valid on the server until it expires, so end the
+    // session here and send the user back to sign in with the new password.
+    clearSession();
+    showSuccess("Password updated. Please sign in with your new password.", 0);
+    setTimeout(() => {
+      window.location.href = "login.html";
+    }, 1500);
   } catch (err) {
     errorDiv.textContent = err.message || "Failed to update password.";
     errorDiv.classList.remove("hidden");
