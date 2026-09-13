@@ -290,10 +290,10 @@ function getRelativeTime(isoStr) {
 
 function getMoodColor(mood) {
   const colors = {
-    POSITIVE: "#10b981",
-    NEUTRAL: "#6b7280",
-    ANXIOUS: "#f59e0b",
-    NEGATIVE: "#ef4444",
+    POSITIVE: "#8ccba3",
+    NEUTRAL: "#c9c1b5",
+    ANXIOUS: "#edbe6e",
+    NEGATIVE: "#e39a8c",
   };
   return colors[mood] || colors.NEUTRAL;
 }
