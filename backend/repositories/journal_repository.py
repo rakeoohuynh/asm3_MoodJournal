@@ -14,7 +14,6 @@ from typing import Any
 
 import boto3
 from boto3.dynamodb.conditions import Attr, Key
-
 from models.journal_entry import JournalEntry
 from models.reflection import Reflection
 from utils.logging_config import get_logger

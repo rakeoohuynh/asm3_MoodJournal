@@ -5,7 +5,7 @@ Each function returns the cleaned value or raises ValidationError.
 """
 
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 MIN_CONTENT_LENGTH = 1
 MAX_CONTENT_LENGTH = 5000
@@ -65,7 +65,7 @@ def validate_entry_date(value: object) -> str:
     UTC tomorrow. Timezones reach UTC+14, which is still inside one day.
     """
     if value is None or value == "":
-        return datetime.now(timezone.utc).date().isoformat()
+        return datetime.now(UTC).date().isoformat()
     if not isinstance(value, str):
         raise ValidationError("Entry date must be in YYYY-MM-DD format.")
     try:
@@ -74,7 +74,7 @@ def validate_entry_date(value: object) -> str:
         raise ValidationError("Entry date must be in YYYY-MM-DD format.") from exc
     if parsed.year < 2000 or parsed.year > 2100:
         raise ValidationError("Entry date is outside the supported range.")
-    if parsed > datetime.now(timezone.utc).date() + timedelta(days=1):
+    if parsed > datetime.now(UTC).date() + timedelta(days=1):
         raise ValidationError("Entry date cannot be in the future.")
     return parsed.isoformat()
 

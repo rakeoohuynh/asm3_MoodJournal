@@ -58,7 +58,7 @@ class Reflection:
         }
 
     @classmethod
-    def from_item(cls, item: dict[str, Any]) -> "Reflection":
+    def from_item(cls, item: dict[str, Any]) -> Reflection:
         return cls(
             user_id=item["userId"],
             period=item.get("period", ""),

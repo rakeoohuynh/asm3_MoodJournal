@@ -8,7 +8,6 @@ import os
 from typing import Any
 
 import boto3
-
 from services import analytics_service
 from utils import api_response
 from utils.logging_config import get_logger

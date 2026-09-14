@@ -29,7 +29,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
@@ -102,7 +102,7 @@ def seed(days_back_limit: int) -> str:
             user = users.find_by_username(DEMO_USERNAME)
         print(f"  created account {DEMO_USERNAME} / {DEMO_PASSWORD} ({user.user_id})")
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     written = 0
     for days_ago, mood, title, content in SEED_ENTRIES:
         if days_ago > days_back_limit:

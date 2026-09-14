@@ -6,13 +6,12 @@ DynamoDB - they are self-contained and expire on their own.
 """
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import jwt
-
 from models.journal_entry import utc_now_iso
 from models.user import User
-from repositories.user_repository import UserRepository, UsernameTakenError
+from repositories.user_repository import UsernameTakenError, UserRepository
 from utils.logging_config import get_logger
 from utils.passwords import hash_password, verify_password
 
@@ -38,12 +37,12 @@ def issue_token(user: User) -> tuple[str, str]:
 
     Returns (token, expires_at_iso).
     """
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=TOKEN_TTL_HOURS)
+    expires_at = datetime.now(UTC) + timedelta(hours=TOKEN_TTL_HOURS)
     payload = {
         "sub": user.user_id,
         "username": user.username,
         "exp": expires_at,
-        "iat": datetime.now(timezone.utc),
+        "iat": datetime.now(UTC),
     }
     token = jwt.encode(payload, _get_secret(), algorithm=JWT_ALGORITHM)
     return token, expires_at.isoformat(timespec="seconds")

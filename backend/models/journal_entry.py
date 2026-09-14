@@ -8,7 +8,7 @@ Sorting by SK therefore sorts by date, which is what the history page needs.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -27,7 +27,7 @@ ENTITY_TYPE = "ENTRY"
 
 def utc_now_iso() -> str:
     """Current UTC time as an ISO-8601 string."""
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 @dataclass
@@ -92,7 +92,7 @@ class JournalEntry:
         }
 
     @classmethod
-    def from_item(cls, item: dict[str, Any]) -> "JournalEntry":
+    def from_item(cls, item: dict[str, Any]) -> JournalEntry:
         """Rebuild an entry from a DynamoDB item."""
         return cls(
             user_id=item["userId"],

@@ -36,7 +36,7 @@ class User:
         }
 
     @classmethod
-    def from_item(cls, item: dict[str, Any]) -> "User":
+    def from_item(cls, item: dict[str, Any]) -> User:
         return cls(
             username=item["username"],
             password_hash=item["passwordHash"],

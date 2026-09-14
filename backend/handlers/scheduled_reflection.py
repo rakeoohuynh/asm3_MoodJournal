@@ -11,7 +11,6 @@ import os
 from typing import Any
 
 import boto3
-
 from services import reflection_service
 from services.reflection_service import NoEntriesError
 from utils.logging_config import get_logger

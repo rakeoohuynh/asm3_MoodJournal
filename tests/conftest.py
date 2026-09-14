@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 # Lambda unpacks the bundle so that "models", "services" etc. are top level.
@@ -40,7 +40,7 @@ def utc_today() -> date:
     *local* date, so anywhere east of UTC the tests seed entries dated
     "tomorrow" for part of every day and the ranges silently miss them.
     """
-    return datetime.now(timezone.utc).date()
+    return datetime.now(UTC).date()
 
 
 class StubUserRepository:

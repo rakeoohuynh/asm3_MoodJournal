@@ -7,11 +7,10 @@ Journal text is never written to the analytics bucket.
 import json
 import os
 from collections import Counter
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import boto3
-
 from models.journal_entry import MOOD_SCORES, VALID_MOODS, JournalEntry
 from repositories.journal_repository import JournalRepository
 from utils.logging_config import get_logger
@@ -30,7 +29,7 @@ def date_range(days: int) -> tuple[str, str]:
     so stopping at UTC today would hide an entry the user just wrote from their
     own dashboard until UTC caught up.
     """
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     start = today - timedelta(days=days - 1)
     return start.isoformat(), (today + timedelta(days=1)).isoformat()
 
@@ -162,7 +161,7 @@ def export_to_s3(
     # JSON Lines: one object per line, which is what the Athena SerDe expects.
     body = "\n".join(json.dumps(to_analytics_record(e)) for e in entries)
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     key = (
         f"{EXPORT_PREFIX}/year={today.year:04d}/month={today.month:02d}/"
         f"day={today.day:02d}/{user_id}.json"

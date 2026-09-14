@@ -9,7 +9,6 @@ from typing import Any
 
 import boto3
 from boto3.dynamodb.conditions import Key
-
 from models.user import User
 from utils.logging_config import get_logger
 
