@@ -1,6 +1,6 @@
 <!-- MoodJournal AWS architecture, drawn on an HTML5 canvas with no external libraries.
      Source of truth: infrastructure/template.yaml, backend/handlers, backend/repositories,
-     backend/services, frontend/*.html and frontend/js/common.js (branch aws-db-test @ f37f632).
+     backend/services, frontend/*.html and frontend/js/common.js (branch main @ fe60ec8).
      Press "S" in the browser to download the canvas as a PNG. -->
 <title>MoodJournal AWS architecture</title>
 <style>html,body{margin:0;background:#fff}canvas{display:block}</style>
@@ -193,7 +193,7 @@ const SLOTS = [
   { i: 4, auth: true, id: "JwtAuthorizerFunction", fn: "moodjournal-jwt-authorizer-{env}", h: "jwt_authorizer.py", x: "256 MB · 10 s" },
   { i: 5, m: "GET", p: "/auth/me", id: "GetMeFunction", fn: "moodjournal-get-me-{env}", h: "get_me.py", x: "30 s" },
   { i: 6, m: "POST", p: "/auth/change-password", id: "ChangePasswordFunction", fn: "moodjournal-change-password-{env}", h: "change_password.py", x: "1024 MB (scrypt)" },
-  { i: 7, m: "GET", p: "/analytics/athena", id: "RunAthenaQueryFunction", fn: "moodjournal-run-athena-query-{env}", h: "run_athena_query.py", x: "60 s" },
+  { i: 7, m: "GET", p: "/analytics/athena", id: "RunAthenaQueryFunction", fn: "moodjournal-run-athena-query-{env}", h: "run_athena_query.py", x: "60 s · query cap 20 s" },
   { i: 8, m: "POST", p: "/analytics/export", id: "ExportAnalyticsFunction", fn: "moodjournal-export-analytics-{env}", h: "export_analytics.py", x: "300 s · also runs daily" },
   { i: 9, m: "GET", p: "/entries", id: "ListEntriesFunction", fn: "moodjournal-list-entries-{env}", h: "list_entries.py", x: "30 s" },
   { i: 10, m: "GET", p: "/entries/{entryId}", id: "GetEntryFunction", fn: "moodjournal-get-entry-{env}", h: "get_entry.py", x: "30 s" },
@@ -211,7 +211,7 @@ const FEATURES = [
   { slots: [2], title: "Register", sub: "register.html via js/common.js" },
   { slots: [3], title: "Login", sub: "login.html via js/common.js" },
   { slots: [5, 6], title: "Account", sub: "every page: session check and change-password dialog (js/common.js)" },
-  { slots: [7, 8], title: "Analytics API", sub: "⚠ no page calls these two routes" },
+  { slots: [7, 8], title: "Long-term insights", sub: "dashboard.html: Long-term Insights card (Run Query, Export Latest Entries)" },
   { slots: [9, 10, 11], title: "Mood history", sub: "history.html (index.html also lists the last 3 and loads an entry to edit)" },
   { slots: [12], title: "Mood dashboard", sub: "dashboard.html" },
   { slots: [13], title: "View reflections", sub: "reflection.html" },
@@ -221,7 +221,7 @@ const FEATURES = [
 
 // ---------- title ----------
 text("Figure 1: Architectural diagram for MoodJournal", W / 2, 42, { size: 26, style: "italic", align: "center" });
-text("rakeoohuynh/asm3_MoodJournal · branch aws-db-test @ f37f632 · derived from infrastructure/template.yaml (AWS SAM), backend/ and frontend/",
+text("rakeoohuynh/asm3_MoodJournal · branch main @ fe60ec8 · derived from infrastructure/template.yaml (AWS SAM), backend/ and frontend/",
   W / 2, 68, { size: 13, align: "center", color: C.muted });
 
 // ---------- left panel: user, CloudFront, supporting services, logs ----------
@@ -369,6 +369,7 @@ text("Amazon Athena", 1362, 1103, { size: 11.5, weight: "700" });
 text("workgroup moodjournal-{env}", 1362, 1118, { size: 9.5, fit: true, maxW: 122 });
 text("4 named queries, userId", 1362, 1132, { size: 9.5, fit: true, maxW: 122, color: C.muted });
 text("passed as a parameter", 1362, 1145, { size: 9.5, fit: true, maxW: 122, color: C.muted });
+text("latest export per entry", 1362, 1158, { size: 9.5, fit: true, maxW: 122, color: C.muted });
 
 rect(1310, 1200, 180, 72, { fill: "#fff" });
 icon(1320, 1208, 30, C.analytics, "GLU");
@@ -384,7 +385,7 @@ text("moodjournal-analytics-{env}-{acct}", 1582, 1118, { size: 9.5, fit: true, m
 text("moodjournal/year=/month=/day=/", 1582, 1132, { size: 9.5, fit: true, maxW: 172, color: C.muted });
 text("{userId}.json · athena-results/ (7 days)", 1540, 1158, { size: 9.5, fit: true, maxW: 212, color: C.muted });
 
-text("Exports are JSON Lines holding derived fields only (mood, score, content length, never the journal text). Athena reads them through the Glue table.",
+text("Exports are JSON Lines holding derived fields only (mood, score, content length, never the journal text). Athena reads them through the Glue table. Each daily export rewrites 90 days, so queries keep only each entry's latest export.",
   1510, 1200, { size: 10, maxW: 270, lh: 13, color: C.muted });
 
 edge([[sc(7), LAM_B], [sc(7), 1080]], { label: "Runs named query (StartQueryExecution)", lp: { side: "rot", t: 0.55 } });
@@ -395,7 +396,7 @@ edge([[1400, 1170], [1400, 1200]], {});
 // ---------- scheduled background jobs ----------
 rect(1860, 1040, 740, 305, { dash: [7, 5], stroke: C.sched, lw: 1.5 });
 text("Scheduled background jobs", 1875, 1302, { size: 12.5, weight: "700", color: C.sched });
-text("EventBridge Scheduler, no user request", 1875, 1320, { size: 10.5, color: C.sched });
+text("EventBridge Scheduler · the export can also be run from the dashboard", 1875, 1318, { size: 10.5, maxW: 245, lh: 13, color: C.sched });
 
 rect(1880, 1080, 200, 100, { fill: "#fff", stroke: C.sched, lw: 1.4 });
 icon(1890, 1088, 30, C.lambda, "λ");
