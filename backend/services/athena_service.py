@@ -23,55 +23,85 @@ ATHENA_WORKGROUP = os.environ.get("ATHENA_WORKGROUP", "primary")
 OUTPUT_LOCATION = os.environ.get("ATHENA_OUTPUT_LOCATION", "")
 
 _POLL_INTERVAL_SECONDS = 1.0
-_MAX_POLL_ATTEMPTS = 30
+# API Gateway abandons an integration after 29 seconds, and that timeout
+# reaches the browser without CORS headers - an opaque network error. Giving up
+# well before it means the dashboard receives a readable 504 instead.
+_MAX_POLL_ATTEMPTS = 20
 _MAX_ROWS = 200
 
 TABLE = "journal_entries"
 
+# Every daily export rewrites the last 90 days of entries into a new
+# day= partition, so one entry appears in up to 90 partitions. Counting the
+# table directly would multiply every figure. This keeps only the most recent
+# export of each entry, which also picks up an edited entry's latest mood.
+#
+# It is the only place the user id parameter appears, so every query below
+# stays scoped to the caller.
+_LATEST_ENTRIES = f"""
+    latest AS (
+        SELECT entryid, entrydate, mood, moodscore,
+               row_number() OVER (
+                   PARTITION BY entryid ORDER BY year DESC, month DESC, day DESC
+               ) AS export_rank
+        FROM {{db}}.{TABLE}
+        WHERE userid = ?
+    ),
+    entries AS (
+        SELECT entryid, entrydate, mood, moodscore FROM latest WHERE export_rank = 1
+    )
+"""
+
 # Named queries. {db} is filled in from the environment, never from user input.
 QUERIES: dict[str, str] = {
     "mood_count_by_week": f"""
-        SELECT date_trunc('week', date_parse(entrydate, '%Y-%m-%d')) AS week_start,
-               mood,
-               count(*) AS entry_count
-        FROM {{db}}.{TABLE}
-        WHERE userid = ?
-        GROUP BY 1, 2
-        ORDER BY week_start DESC, mood
+        WITH {_LATEST_ENTRIES}
+        SELECT cast(date_trunc('week', date_parse(entrydate, '%Y-%m-%d')) AS date)
+                   AS week_start,
+               count(*) AS entry_count,
+               round(avg(cast(moodscore AS double)), 2) AS avg_mood_score,
+               count_if(mood = 'POSITIVE') AS positive,
+               count_if(mood = 'NEUTRAL') AS neutral,
+               count_if(mood = 'ANXIOUS') AS anxious,
+               count_if(mood = 'NEGATIVE') AS negative
+        FROM entries
+        GROUP BY 1
+        ORDER BY week_start DESC
         LIMIT {_MAX_ROWS}
     """,
     "most_common_mood_by_month": f"""
-        WITH monthly AS (
+        WITH {_LATEST_ENTRIES},
+        monthly AS (
             SELECT substr(entrydate, 1, 7) AS month,
                    mood,
-                   count(*) AS entry_count,
+                   count(*) AS mood_count,
+                   sum(count(*)) OVER (PARTITION BY substr(entrydate, 1, 7)) AS entry_count,
                    row_number() OVER (
-                       PARTITION BY substr(entrydate, 1, 7) ORDER BY count(*) DESC
+                       PARTITION BY substr(entrydate, 1, 7) ORDER BY count(*) DESC, mood
                    ) AS rnk
-            FROM {{db}}.{TABLE}
-            WHERE userid = ?
+            FROM entries
             GROUP BY 1, 2
         )
-        SELECT month, mood AS most_common_mood, entry_count
+        SELECT month, mood AS most_common_mood, mood_count, entry_count
         FROM monthly
         WHERE rnk = 1
         ORDER BY month DESC
         LIMIT {_MAX_ROWS}
     """,
     "average_mood_score_over_time": f"""
+        WITH {_LATEST_ENTRIES}
         SELECT entrydate,
                round(avg(cast(moodscore AS double)), 2) AS avg_mood_score,
                count(*) AS entry_count
-        FROM {{db}}.{TABLE}
-        WHERE userid = ?
+        FROM entries
         GROUP BY entrydate
         ORDER BY entrydate DESC
         LIMIT {_MAX_ROWS}
     """,
     "entry_count_by_day": f"""
+        WITH {_LATEST_ENTRIES}
         SELECT entrydate, count(*) AS entry_count
-        FROM {{db}}.{TABLE}
-        WHERE userid = ?
+        FROM entries
         GROUP BY entrydate
         ORDER BY entrydate DESC
         LIMIT {_MAX_ROWS}

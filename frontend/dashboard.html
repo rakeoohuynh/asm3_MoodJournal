@@ -97,6 +97,32 @@
               <strong>Note:</strong> Mood scores are used only to visualise journal trends. They are not a measurement of wellbeing.
             </div>
           </div>
+
+          <!-- Independent of the period selector and of the dashboard request:
+               Athena reads the S3 export, not DynamoDB, so it stays usable
+               even when the section above fails to load. -->
+          <div class="card athena-card">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">Long-term Insights</h3>
+                <div class="text-sm text-muted">
+                  Queried with Amazon Athena over your exported history. Exports run daily, so
+                  today's entries appear after the next export.
+                </div>
+              </div>
+            </div>
+
+            <div class="athena-controls">
+              <select id="athenaQuerySelect" onchange="runAthenaQuery()" aria-label="Athena query"></select>
+              <button id="athenaRunButton" class="btn btn-primary btn-sm" onclick="runAthenaQuery()">Run Query</button>
+              <button id="athenaExportButton" class="btn btn-secondary btn-sm" onclick="refreshAnalyticsExport()">Export Latest Entries</button>
+            </div>
+            <div id="athenaDescription" class="text-sm text-muted athena-description"></div>
+
+            <div id="athenaError" class="alert alert-danger hidden"></div>
+            <div id="athenaResult"></div>
+            <div id="athenaMeta" class="text-sm text-muted athena-meta hidden"></div>
+          </div>
         </div>
       </main>
     </div>
@@ -232,8 +258,171 @@
         });
       }
 
+      // Column order and formatting for each named query in athena_service.py.
+      // Athena returns every value as a string, so each formatter parses its own.
+      const ATHENA_QUERIES = {
+        mood_count_by_week: {
+          label: "Mood breakdown by week",
+          description: "Entries, average score and mood counts for every exported week.",
+          columns: [
+            { key: "week_start", label: "Week of", format: "date" },
+            { key: "entry_count", label: "Entries" },
+            { key: "avg_mood_score", label: "Avg Score", format: "score" },
+            { key: "positive", label: "Positive", format: "badge-success" },
+            { key: "neutral", label: "Neutral" },
+            { key: "anxious", label: "Anxious", format: "badge-warning" },
+            { key: "negative", label: "Negative", format: "badge-danger" },
+          ],
+        },
+        most_common_mood_by_month: {
+          label: "Most common mood by month",
+          description: "The mood you wrote most often in each month.",
+          columns: [
+            { key: "month", label: "Month", format: "month" },
+            { key: "most_common_mood", label: "Most Common Mood", format: "mood" },
+            { key: "mood_count", label: "Times" },
+            { key: "entry_count", label: "Entries in Month" },
+          ],
+        },
+        average_mood_score_over_time: {
+          label: "Average mood score by day",
+          description: "Daily average score. Positive = 2, Neutral = 1, Anxious = 0, Negative = -1.",
+          columns: [
+            { key: "entrydate", label: "Date", format: "date" },
+            { key: "avg_mood_score", label: "Avg Score", format: "score" },
+            { key: "entry_count", label: "Entries" },
+          ],
+        },
+        entry_count_by_day: {
+          label: "Journaling consistency",
+          description: "How many entries you wrote on each day.",
+          columns: [
+            { key: "entrydate", label: "Date", format: "date" },
+            { key: "entry_count", label: "Entries" },
+          ],
+        },
+      };
+
+      function formatAthenaValue(value, format) {
+        if (value === null || value === undefined || value === "") return "—";
+        switch (format) {
+          case "date":
+            return escapeHtml(formatDate(String(value).slice(0, 10)));
+          case "month": {
+            const date = new Date(`${value}-01T00:00:00`);
+            return Number.isNaN(date.getTime())
+              ? escapeHtml(value)
+              : date.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+          }
+          case "score":
+            return Number(value).toFixed(2);
+          case "mood": {
+            const mood = String(value).toUpperCase();
+            return MOODS.includes(mood)
+              ? `<span class="mood-badge mood-${mood.toLowerCase()}">${mood}</span>`
+              : escapeHtml(value);
+          }
+          case "badge-success":
+          case "badge-warning":
+          case "badge-danger":
+            return `<span class="badge ${format}">${escapeHtml(value)}</span>`;
+          default:
+            return escapeHtml(value);
+        }
+      }
+
+      function populateAthenaQueries() {
+        const select = document.getElementById("athenaQuerySelect");
+        select.innerHTML = Object.entries(ATHENA_QUERIES)
+          .map(([name, q]) => `<option value="${name}">${escapeHtml(q.label)}</option>`)
+          .join("");
+      }
+
+      // Switching queries while one is still running starts another request.
+      // Only the newest may update the card or release the button, otherwise a
+      // slow earlier query would overwrite the result now selected.
+      let athenaRequestId = 0;
+
+      async function runAthenaQuery() {
+        const requestId = ++athenaRequestId;
+        const name = document.getElementById("athenaQuerySelect").value;
+        const query = ATHENA_QUERIES[name];
+        const button = document.getElementById("athenaRunButton");
+        const resultDiv = document.getElementById("athenaResult");
+        const errorDiv = document.getElementById("athenaError");
+        const metaDiv = document.getElementById("athenaMeta");
+
+        document.getElementById("athenaDescription").textContent = query.description;
+        errorDiv.classList.add("hidden");
+        metaDiv.classList.add("hidden");
+        resultDiv.innerHTML = `<div class="inline-spinner athena-running"><span class="loader"></span> Running query on Athena…</div>`;
+        if (!button.disabled) setButtonBusy(button, true, "Running...");
+
+        try {
+          const { result } = await api.get(`/analytics/athena?query=${encodeURIComponent(name)}`);
+          if (requestId !== athenaRequestId) return;
+          renderAthenaResult(query, result);
+        } catch (err) {
+          if (requestId !== athenaRequestId) return;
+          resultDiv.innerHTML = "";
+          errorDiv.textContent = err.message || "Could not run the Athena query.";
+          errorDiv.classList.remove("hidden");
+        } finally {
+          if (requestId === athenaRequestId) setButtonBusy(button, false);
+        }
+      }
+
+      function renderAthenaResult(query, result) {
+        const resultDiv = document.getElementById("athenaResult");
+        const metaDiv = document.getElementById("athenaMeta");
+        const rows = result.rows || [];
+
+        if (!rows.length) {
+          resultDiv.innerHTML = `
+            <div class="empty-state athena-empty">
+              <div class="empty-state-text">Athena found no exported entries yet.</div>
+              <div class="text-sm text-muted">Use <strong>Export Latest Entries</strong> to copy your entries to S3, then run the query again.</div>
+            </div>`;
+          return;
+        }
+
+        resultDiv.innerHTML = `
+          <div style="overflow-x: auto">
+            <table class="table">
+              <thead><tr>${query.columns.map((c) => `<th>${escapeHtml(c.label)}</th>`).join("")}</tr></thead>
+              <tbody>
+                ${rows.map((row) => `
+                  <tr>${query.columns.map((c) => `<td>${formatAthenaValue(row[c.key], c.format)}</td>`).join("")}</tr>`).join("")}
+              </tbody>
+            </table>
+          </div>`;
+
+        metaDiv.textContent = `${result.rowCount} row${result.rowCount === 1 ? "" : "s"} · Athena execution ${result.executionId}`;
+        metaDiv.classList.remove("hidden");
+      }
+
+      async function refreshAnalyticsExport() {
+        const button = document.getElementById("athenaExportButton");
+        setButtonBusy(button, true, "Exporting...");
+        try {
+          const data = await api.post("/analytics/export", {});
+          showSuccess(
+            data.exported
+              ? `Exported ${data.exported} entr${data.exported === 1 ? "y" : "ies"} to S3.`
+              : "There were no entries from the last 90 days to export."
+          );
+          await runAthenaQuery();
+        } catch (err) {
+          showError(err.message || "Could not export entries.");
+        } finally {
+          setButtonBusy(button, false);
+        }
+      }
+
       populateUserSidebar().catch(() => {});
       loadDashboard();
+      populateAthenaQueries();
+      runAthenaQuery();
       setActivePage("dashboard");
     </script>
   </body>

@@ -1248,6 +1248,39 @@ textarea {
   align-items: flex-end;
 }
 
+.athena-card {
+  margin-top: 2rem;
+}
+
+.athena-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.athena-controls select {
+  flex: 1 1 240px;
+  max-width: 320px;
+}
+
+.athena-description {
+  margin-bottom: 1rem;
+}
+
+.athena-running {
+  padding: 1.5rem 0;
+}
+
+.athena-empty {
+  padding: 1.75rem 1rem;
+}
+
+.athena-meta {
+  margin-top: 0.75rem;
+}
+
 @media (max-width: 900px) {
   .distribution-wrap {
     grid-template-columns: 1fr;

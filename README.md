@@ -15,7 +15,8 @@ suite runs offline. The runtime is AWS-only — there is no local server compone
 - **Mood trends dashboard** — distribution, daily trend line and week-by-week summary
 - **AI-written reflections** — on demand, or generated automatically every 7 days
 - **Search and filtering** — by text, mood and date range, with pagination
-- **Analytics pipeline** — entries exported to S3 and queryable through Athena
+- **Analytics pipeline** — entries exported to S3 and queried through Athena, shown in the
+  dashboard's *Long-term Insights* card
 - **Custom authentication** — username/password with JWT, verified by a Lambda authorizer
 
 ---
