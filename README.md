@@ -24,34 +24,43 @@ suite runs offline. The runtime is AWS-only — there is no local server compone
 ## 🏗️ Architecture
 
 ```
-Browser
-   ↓
-CloudFront (CDN)
-   ↓
-S3 (static frontend)
-   ↓
-API Gateway (REST)
-   ↓
-Lambda authorizer  →  Lambda handlers (Python 3.14)
-                          ├→ Google Gemini API
-                          ├→ DynamoDB
-                          ├→ S3 (analytics export)
-                          └→ Athena
-
-EventBridge Scheduler →  weekly reflection Lambda
-                      →  daily analytics export Lambda
+Browser ── HTTPS ──→ CloudFront ── origin access control ──→ S3 (static frontend)
+   │
+   └── REST, Bearer JWT ──→ API Gateway ──→ JWT authorizer (Lambda)
+                               │
+                               ├──→ API handlers (14 Lambda functions, Python 3.14)
+                               │       ├──→ DynamoDB (entries, reflections, users)
+                               │       ├──→ Google Gemini API (classify mood, write reflection)
+                               │       └──→ Athena ──→ S3 analytics bucket
+                               │              (dashboard "Long-term Insights" queries)
+                               │
+                               └──→ Export function ── POST /analytics/export ──┐
+                                                                                ├──→ S3 analytics bucket
+EventBridge Scheduler ── rate(1 day) ──→ Export function ───────────────────────┘     (JSON Lines)
+                      ── rate(7 days) ─→ Scheduled reflection ──→ DynamoDB, Gemini
 ```
+
+The same export function runs daily for every user and on demand for the signed-in user, when
+the dashboard's *Export Latest Entries* button is pressed. Athena reads those exports through a
+Glue table; the dashboard's own charts still read DynamoDB directly.
+
+**Diagrams**
+
+- [`docs/architecture/moodjournal-architecture.png`](docs/architecture/moodjournal-architecture.png)
+  — Figure 1: every route, Lambda function, table operation and scheduled job
+- [`docs/architecture/moodjournal-architecture.html`](docs/architecture/moodjournal-architecture.html)
+  — its source, drawn on an HTML canvas; open it in a browser and press **S** to save a PNG
 
 **AWS services**
 
 | Service | Role |
 |---|---|
-| Lambda | 17 functions: API handlers, authorizer, two scheduled jobs |
+| Lambda | 17 functions: 15 API routes, the JWT authorizer and the weekly reflection job; the export route also runs daily |
 | API Gateway | REST API with a request authorizer and CORS |
 | DynamoDB | Journal entries, reflections and user accounts |
 | S3 | Static frontend hosting, plus the analytics export bucket |
 | CloudFront | CDN in front of the frontend bucket, via origin access control |
-| Athena + Glue | SQL analytics over the exported data |
+| Athena + Glue | Named SQL queries over the exported data, shown in the dashboard's *Long-term Insights* card |
 | EventBridge Scheduler | Weekly reflections, daily analytics export |
 | CloudWatch | Structured JSON logs from every function |
 
@@ -98,6 +107,9 @@ asm3_MoodJournal/
 │   ├── template.yaml      # AWS SAM template — the whole stack
 │   └── athena/            # Database, table and example queries
 │
+├── docs/
+│   └── architecture/      # Figure 1: architecture diagram (PNG) and its canvas source (HTML)
+│
 ├── scripts/
 │   ├── deploy_frontend.ps1   # Config + upload + cache invalidation
 │   └── seed_demo_data.py     # Demo account and back-dated entries
@@ -143,7 +155,10 @@ a second.
 Covered: registration and login (including that a wrong password and an unknown username are
 indistinguishable), token issuing and rejection of forged tokens, journal CRUD, cross-user
 isolation, case-insensitive search, dashboard aggregation against every field the frontend reads,
-reflection generation, and that journal text is never sent to Gemini — only aggregates and titles.
+reflection generation, and that reflections send Gemini only aggregates and titles, never journal
+text. Athena is exercised with a fake client: every named query is scoped to the caller and
+counts each entry's latest export only, unknown query names never reach Athena, and a slow query
+is stopped and returned as a 504 before API Gateway's 29-second limit.
 
 ---
 
@@ -164,6 +179,16 @@ mypy backend
 ```powershell
 sam validate --template infrastructure\template.yaml --lint
 sam build --template infrastructure\template.yaml
+```
+
+If the project lives in a OneDrive folder, `sam build` can fail with `Access is denied` while
+deleting `.aws-sam\build`, because OneDrive marks the synced folders read-only. Build outside
+OneDrive instead, and point `sam deploy` at that build and at this project's `samconfig.toml`
+by absolute path:
+
+```powershell
+sam build --template infrastructure\template.yaml --build-dir C:\sam-build\moodjournal
+sam deploy --template-file C:\sam-build\moodjournal\template.yaml --config-file "$PWD\samconfig.toml"
 ```
 
 ### 2. Generate a JWT secret
@@ -247,8 +272,8 @@ costs **zero Gemini API calls**.
 | GET | `/dashboard` | required | Aggregated stats — `period` = 7d / 14d / 30d / 90d |
 | POST | `/reflections` | required | Generate a reflection |
 | GET | `/reflections` | required | List reflections |
-| POST | `/analytics/export` | required | Export analytics to S3 |
-| GET | `/analytics/athena` | required | Run an Athena query |
+| POST | `/analytics/export` | required | Export the caller's last 90 days to S3 (also runs daily for everyone) |
+| GET | `/analytics/athena` | required | Run a named Athena query — `query` = `mood_count_by_week`, `most_common_mood_by_month`, `average_mood_score_over_time` or `entry_count_by_day` |
 
 Protected routes derive the user from the Lambda authorizer's request context, never from a value
 supplied by the browser.
@@ -290,6 +315,8 @@ is a query rather than a table scan.
 - **Least-privilege IAM** — each function is granted only the tables and buckets it uses
 - **No journal text in logs** — only lengths are logged
 - **Journal text stays out of analytics** — the S3 export carries content *length*, never content
+- **No caller-supplied SQL** — the Athena route accepts only a query name from an allow-list, and
+  the user id is passed as an execution parameter
 - **`.env`, `samconfig.toml` and `.aws-sam/` are gitignored**
 
 ---
@@ -316,6 +343,9 @@ still contain objects.
 - Journal entries are protected by DynamoDB's server-side encryption at rest, but not
   additionally encrypted per user
 - Athena partition projection is configured for the years 2026–2035
+- *Long-term Insights* reads the S3 export, so it lags DynamoDB until the next daily export or a
+  press of *Export Latest Entries*
+- A deleted entry remains in earlier exports and can still appear in Athena results
 - No password reset flow, by design — authentication is deliberately self-contained
 
 ---
